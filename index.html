@@ -1,0 +1,1312 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Project Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box}
+html{font-size:15px}
+body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;background:#F3F5F8;color:#1E293B}
+input,select,button,textarea{font-family:inherit}
+button{cursor:pointer}
+button:hover{filter:brightness(0.97)}
+::-webkit-scrollbar{height:10px;width:10px}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:8px}
+.card{background:#fff;border-radius:14px;border:1px solid #E2E8F0;padding:20px;box-shadow:0 1px 2px rgba(15,23,42,0.03)}
+.btn{display:flex;align-items:center;gap:7px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid #E2E8F0;color:#334155;background:#fff;white-space:nowrap}
+.btn-primary{color:#fff;background:#1E3A5F;border:none}
+.btn-outline{border:1px solid #1E3A5F;color:#1E3A5F;background:#fff}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, useMemo, useRef } = React;
+const h = React.createElement;
+
+/* ---------- storage ---------- */
+const STORAGE_KEY = "project-tracker-app-v3";
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function saveState(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); return true; }
+  catch { return false; }
+}
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const norm = s => (s || "").trim();
+const makeKey = (application, project) => `${norm(application).toLowerCase()}::${norm(project).toLowerCase()}`;
+
+/* ---------- icons ---------- */
+/* Default size is 1em so every icon automatically matches the font-size of
+   whatever text/button/label it sits next to (no fixed pixel sizing). */
+const ic = (p) => ({ width:"1em", height:"1em", ...p });
+const Icon = {
+  plus: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("line",{x1:12,y1:5,x2:12,y2:19}), h("line",{x1:5,y1:12,x2:19,y2:12})),
+  trash: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"3 6 5 6 21 6"}), h("path",{d:"M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"}), h("path",{d:"M10 11v6M14 11v6"})),
+  up: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"18 15 12 9 6 15"})),
+  down: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"6 9 12 15 18 9"})),
+  updown: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"8 9 12 5 16 9"}), h("polyline",{points:"8 15 12 19 16 15"})),
+  download: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}), h("polyline",{points:"7 10 12 15 17 10"}), h("line",{x1:12,y1:15,x2:12,y2:3})),
+  upload: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}), h("polyline",{points:"17 8 12 3 7 8"}), h("line",{x1:12,y1:3,x2:12,y2:15})),
+  columns: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("line",{x1:4,y1:21,x2:4,y2:14}), h("line",{x1:4,y1:10,x2:4,y2:3}), h("line",{x1:12,y1:21,x2:12,y2:12}), h("line",{x1:12,y1:8,x2:12,y2:3}), h("line",{x1:20,y1:21,x2:20,y2:16}), h("line",{x1:20,y1:12,x2:20,y2:3}), h("line",{x1:1,y1:14,x2:7,y2:14}), h("line",{x1:9,y1:8,x2:15,y2:8}), h("line",{x1:17,y1:16,x2:23,y2:16})),
+  grip: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"currentColor"}, h("circle",{cx:9,cy:5,r:1.4}), h("circle",{cx:9,cy:12,r:1.4}), h("circle",{cx:9,cy:19,r:1.4}), h("circle",{cx:15,cy:5,r:1.4}), h("circle",{cx:15,cy:12,r:1.4}), h("circle",{cx:15,cy:19,r:1.4})),
+  x: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("line",{x1:18,y1:6,x2:6,y2:18}), h("line",{x1:6,y1:6,x2:18,y2:18})),
+  checklist: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"9 11 12 14 22 4"}), h("path",{d:"M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"})),
+  grid: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("rect",{x:3,y:3,width:7,height:7,rx:1.5}), h("rect",{x:14,y:3,width:7,height:7,rx:1.5}), h("rect",{x:3,y:14,width:7,height:7,rx:1.5}), h("rect",{x:14,y:14,width:7,height:7,rx:1.5})),
+  filter: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polygon",{points:"22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"})),
+  file: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"}), h("polyline",{points:"14 2 14 8 20 8"})),
+  chevronRight: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"9 18 15 12 9 6"})),
+};
+
+const PALETTE = ["#1E3A5F","#2E6F95","#4F9D9D","#8FBF9F","#D9A441","#C1666B","#7C6A8E","#4A5568"];
+
+/* ---------- timeline (weekly grid, 2 years starting 2026) ---------- */
+const YEAR0 = 2026, YEARS = 2, TOTAL_WEEKS = 52 * YEARS, WEEK_W = 18;
+const EPOCH = Date.UTC(YEAR0, 0, 1);
+function weekIndex(dateStr) {
+  if (!dateStr) return null;
+  const t = new Date(dateStr + "T00:00:00Z").getTime();
+  if (isNaN(t)) return null;
+  const days = Math.floor((t - EPOCH) / 86400000);
+  const w = Math.floor(days / 7);
+  return (w < 0 || w >= TOTAL_WEEKS) ? null : w;
+}
+function buildMonthTicks() {
+  const out = [];
+  for (let y = 0; y < YEARS; y++) {
+    for (let m = 0; m < 12; m++) {
+      const year = YEAR0 + y;
+      const t = Date.UTC(year, m, 1);
+      const days = Math.floor((t - EPOCH) / 86400000);
+      const w = Math.floor(days / 7);
+      if (w >= 0 && w < TOTAL_WEEKS) {
+        out.push({
+          x: w * WEEK_W,
+          label: new Date(t).toLocaleDateString("id-ID", { month: "short", timeZone: "UTC" }) + (m === 0 ? ` ${year}` : ""),
+          isYearStart: m === 0
+        });
+      }
+    }
+  }
+  return out;
+}
+const MONTH_TICKS = buildMonthTicks();
+const WEEK_NUMS = Array.from({ length: TOTAL_WEEKS }, (_, i) => (i % 52) + 1);
+const TIMELINE_W = TOTAL_WEEKS * WEEK_W;
+
+function TimelineHeader() {
+  return h("div", { style: { position:"relative", height:42 }, title:`Timeline ${YEAR0}\u2013${YEAR0+YEARS-1}` },
+    MONTH_TICKS.map((t,i) => h("div",{key:i, style:{position:"absolute", left:t.x, top:0, bottom:0, borderLeft: t.isYearStart ? "1px solid rgba(255,255,255,0.5)" : "1px solid rgba(255,255,255,0.2)"}},
+      h("span",{style:{position:"absolute", top:5, left:4, fontSize:11, color:t.isYearStart?"#fff":"#B7C3D6", fontWeight:t.isYearStart?700:400, whiteSpace:"nowrap"}}, t.label)
+    )),
+    WEEK_NUMS.map((n,i) => h("span",{key:i, style:{position:"absolute", left:i*WEEK_W+2, bottom:4, fontSize:9, color:"#8B9BB4"}}, n))
+  );
+}
+
+function TimelineBar({ startDate, endDate, colorSeed }) {
+  const s = weekIndex(startDate), e = weekIndex(endDate);
+  const ok = s !== null && e !== null;
+  const lo = ok ? Math.min(s,e) : 0, hi = ok ? Math.max(s,e) : 0;
+  const todayIdx = weekIndex(new Date().toISOString().slice(0,10));
+  const color = PALETTE[(colorSeed||0) % PALETTE.length];
+  return h("div", { style:{ position:"relative", width:TIMELINE_W, height:38 } },
+    MONTH_TICKS.map((t,i)=>h("div",{key:i, style:{position:"absolute", left:t.x, top:0, bottom:0, borderLeft: t.isYearStart ? "2px solid #E2E8F0" : "1px solid #F1F5F9"}})),
+    todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444"}, title:"Hari ini"}),
+    ok && h("div",{ title:`${startDate} \u2013 ${endDate}`, style:{ position:"absolute", left:lo*WEEK_W+2, top:6, height:26, width:Math.max((hi-lo+1)*WEEK_W-4,10), background:color, borderRadius:5 } })
+  );
+}
+
+/* ---------- shared option sets ---------- */
+const STATUS_OPTS = ["Open","In Progress","Done","Cancelled"];
+const STATUS_BG = { Open:"#DCFCE7", "In Progress":"#FEF9C3", Done:"#E5E7EB", Cancelled:"#E5E7EB" };
+const STATUS_FG = { Open:"#166534", "In Progress":"#854D0E", Done:"#374151", Cancelled:"#6B7280" };
+const PRIORITY_OPTS = ["Critical","High","Med","Low"];
+const PRIORITY_BG = { Critical:"#FEE2E2", High:"#FFEDD5", Med:"#FEF9C3", Low:"#E5E7EB" };
+const PRIORITY_FG = { Critical:"#991B1B", High:"#C2410C", Med:"#854D0E", Low:"#374151" };
+const PHASE_OPTS = ["Initiation","Planning","Design","Development","Testing","UAT","Deployment","Closed"];
+const PHASE_BG = { Initiation:"#E0E7FF", Planning:"#DBEAFE", Design:"#CFFAFE", Development:"#DCFCE7", Testing:"#FEF9C3", UAT:"#FFEDD5", Deployment:"#FCE7F3", Closed:"#E5E7EB" };
+const PHASE_FG = { Initiation:"#3730A3", Planning:"#1D4ED8", Design:"#0E7490", Development:"#166534", Testing:"#854D0E", UAT:"#C2410C", Deployment:"#9D174D", Closed:"#374151" };
+
+function RagSelect({ value, options, bgMap, fgMap, onChange, strikeValues }) {
+  const bg = value ? (bgMap[value] || "#F1F5F9") : "#fff";
+  const fg = value ? (fgMap[value] || "#475569") : "#1E293B";
+  const strike = strikeValues && strikeValues.includes(value);
+  return h("select", {
+    value: value || "", onChange: e => onChange(e.target.value),
+    style: { width:"100%", fontSize:12, fontWeight:600, border: value ? "1px solid transparent" : "1px solid #E2E8F0",
+      borderRadius:7, padding:"6px 4px", background:bg, color:fg, outline:"none", textAlign:"center",
+      textDecoration: strike ? "line-through" : "none" }
+  }, h("option",{value:""},"\u2014 pilih \u2014"), options.map(o => h("option",{key:o,value:o},o)));
+}
+
+/* Excel-style column filter: a funnel button in the column header opens a
+   checklist of that column's unique values. Uncheck a value to hide rows
+   containing it. `selected` is either null (no filter / show all) or an
+   array of the currently-checked values. Renders via position:fixed so the
+   panel escapes any scrollable/overflow ancestor (table wrappers use
+   overflow:auto and would otherwise clip it). */
+function FilterDropdown({ options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [pos, setPos] = useState({ top:0, left:0 });
+  const btnRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    document.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const openPanel = () => {
+    if (btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.left - 90, window.innerWidth - 224)) });
+    }
+    setOpen(o => !o);
+  };
+
+  const checkedSet = selected === null ? new Set(options) : new Set(selected);
+  const isActive = selected !== null && selected.length < options.length;
+  const filteredOptions = options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+  const toggleValue = v => {
+    const next = new Set(checkedSet);
+    if (next.has(v)) next.delete(v); else next.add(v);
+    onChange(next.size === options.length ? null : [...next]);
+  };
+
+  return h("div", { style:{ position:"relative", display:"flex" }, onClick: e => e.stopPropagation() },
+    h("button", {
+      ref: btnRef, onClick: openPanel, title:"Filter",
+      style:{ background:"none", border:"none", padding:0, display:"flex", alignItems:"center", cursor:"pointer",
+        color: isActive ? "#5EEAD4" : "inherit" }
+    }, h(Icon.filter,{})),
+    open && h("div", {
+      style:{ position:"fixed", top:pos.top, left:pos.left, zIndex:100, background:"#fff", color:"#1E293B",
+        border:"1px solid #E2E8F0", borderRadius:10, boxShadow:"0 10px 25px rgba(0,0,0,0.18)", width:216,
+        display:"flex", flexDirection:"column" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ padding:8, borderBottom:"1px solid #F1F5F9" } },
+        h("input", { value:search, onChange:e=>setSearch(e.target.value), placeholder:"Cari\u2026", autoFocus:true,
+          style:{ width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:6, padding:"5px 7px", outline:"none" } })
+      ),
+      h("div", { style:{ display:"flex", gap:12, padding:"6px 8px", borderBottom:"1px solid #F1F5F9" } },
+        h("button", { onClick:()=>onChange(null), style:{ fontSize:11, color:"#1E3A5F", background:"none", border:"none", fontWeight:600, padding:0, cursor:"pointer" } }, "Pilih Semua"),
+        h("button", { onClick:()=>onChange([]), style:{ fontSize:11, color:"#DC2626", background:"none", border:"none", fontWeight:600, padding:0, cursor:"pointer" } }, "Kosongkan")
+      ),
+      h("div", { style:{ maxHeight:220, overflow:"auto", padding:6 } },
+        filteredOptions.length === 0
+          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"8px 4px" } }, "Tidak ada opsi")
+          : filteredOptions.map(o => h("label", { key:o, style:{ display:"flex", alignItems:"center", gap:7, padding:"5px 4px", fontSize:12, color:"#334155", cursor:"pointer" } },
+              h("input", { type:"checkbox", checked: checkedSet.has(o), onChange:()=>toggleValue(o) }),
+              h("span", { style:{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, o)
+            ))
+      )
+    )
+  );
+}
+
+/* Compute per-column unique display values (blank -> "(Kosong)") for the
+   FilterDropdown options, and a predicate to apply a filters map to a row. */
+function buildColumnOptions(rows, colKeys) {
+  const map = {};
+  colKeys.forEach(key => {
+    const vals = new Set();
+    rows.forEach(r => { const v = norm(r[key]); vals.add(v ? v : "(Kosong)"); });
+    map[key] = [...vals].sort((a,b) => a.localeCompare(b));
+  });
+  return map;
+}
+function rowPassesFilters(row, filters, colKeys) {
+  return colKeys.every(key => {
+    const sel = filters[key];
+    if (!sel) return true;
+    const val = norm(row[key]) || "(Kosong)";
+    return sel.includes(val);
+  });
+}
+
+/* =========================================================================
+   PROJECT LIST (master table)
+   ========================================================================= */
+const PL_COLS = [
+  { key:"application", label:"Application", width:170 },
+  { key:"project", label:"Project", width:210 },
+  { key:"startDate", label:"Start Date", width:126 },
+  { key:"endDate", label:"End Date", width:126 },
+  { key:"tpo", label:"TPO", width:150 },
+  { key:"deliveryLead", label:"Delivery Lead", width:160 },
+  { key:"priority", label:"Priority", width:104 },
+  { key:"phase", label:"Phase", width:150 },
+];
+
+function plCellEditor(colKey, row, onUpdate) {
+  const textStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
+  const dateStyle = { width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"5px 6px", outline:"none" };
+  switch (colKey) {
+    case "application": return h("input", { value: row.application||"", onChange:e=>onUpdate("application", e.target.value), placeholder:"Nama aplikasi\u2026", style:textStyle });
+    case "project": return h("input", { value: row.project||"", onChange:e=>onUpdate("project", e.target.value), placeholder:"Nama project\u2026", style:textStyle });
+    case "startDate": return h("input", { type:"date", value: row.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
+    case "endDate": return h("input", { type:"date", value: row.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
+    case "tpo": return h("input", { value: row.tpo||"", onChange:e=>onUpdate("tpo", e.target.value), placeholder:"TPO", style:textStyle });
+    case "deliveryLead": return h("input", { value: row.deliveryLead||"", onChange:e=>onUpdate("deliveryLead", e.target.value), placeholder:"Delivery Lead", style:textStyle });
+    case "priority": return h(RagSelect, { value: row.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
+    case "phase": return h(RagSelect, { value: row.phase, options: PHASE_OPTS, bgMap: PHASE_BG, fgMap: PHASE_FG, onChange: v => onUpdate("phase", v) });
+    default: return null;
+  }
+}
+
+function PlHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, onFilterChange }) {
+  const active = sortConfig.key === col.key;
+  return h("div", {
+    style: { width: col.width, padding:"10px 8px", display:"flex", alignItems:"center", gap:5, userSelect:"none", fontSize:12 }
+  },
+    h("span", {
+      onClick: () => onSort(col.key), title:"Klik untuk urutkan",
+      style:{ color:"#fff", fontWeight:600, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }
+    }, col.label),
+    h("span", { onClick: () => onSort(col.key), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
+      active
+        ? (sortConfig.dir === "asc" ? h(Icon.up,{style:{color:"#fff"}}) : h(Icon.down,{style:{color:"#fff"}}))
+        : h(Icon.updown,{style:{color:"#8B9BB4", opacity:.7}})
+    ),
+    h(FilterDropdown, { options:filterOptions, selected:filterSelected, onChange:onFilterChange })
+  );
+}
+
+const PL_COL_KEYS = PL_COLS.map(c => c.key);
+
+function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort }) {
+  const [filters, setFilters] = useState({});
+  const todayIdx = weekIndex(new Date().toISOString().slice(0,10));
+  const fixedW = 44 + PL_COLS.reduce((s,c)=>s+c.width,0) + 40;
+
+  const columnOptions = useMemo(() => buildColumnOptions(rows, PL_COL_KEYS), [rows]);
+  const onFilterChange = (colKey, selected) => setFilters(f => ({ ...f, [colKey]: selected }));
+  const clearAllFilters = () => setFilters({});
+  const filteredRows = useMemo(() => rows.filter(r => rowPassesFilters(r, filters, PL_COL_KEYS)), [rows, filters]);
+  const activeFilterCount = Object.values(filters).filter(v => Array.isArray(v)).length;
+
+  return h("div", null,
+    activeFilterCount > 0 && h("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:8, fontSize:12, color:"#64748B" } },
+      h(Icon.filter,{ style:{ color:"#4F9D9D" } }),
+      `${activeFilterCount} filter aktif \u00B7 menampilkan ${filteredRows.length} dari ${rows.length} project`,
+      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Hapus semua filter")
+    ),
+    h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
+      h("div", { style:{ minWidth: fixedW + TIMELINE_W } },
+        h("div", { style:{ display:"flex", position:"sticky", top:0, zIndex:6 } },
+          h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:7, background:"#152238" } },
+            h("div", { style:{ width:44, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "No"),
+            PL_COLS.map(c => h(PlHeaderCell, { key:c.key, col:c, sortConfig, onSort,
+              filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
+              onFilterChange: v => onFilterChange(c.key, v) })),
+            h("div", { style:{ width:40, background:"#152238" } })
+          ),
+          h("div", { style:{ width:TIMELINE_W, background:"#152238" } }, h(TimelineHeader), h("div",{style:{position:"absolute"}})),
+        ),
+        h("div", { style:{ position:"relative" } },
+          h("div", { style:{ position:"absolute", top:0, left:fixedW, bottom:0, width:TIMELINE_W, pointerEvents:"none" } },
+            MONTH_TICKS.map((t,i)=>h("div",{key:i, style:{position:"absolute", left:t.x, top:0, bottom:0, borderLeft: t.isYearStart ? "2px solid #CBD5E1" : "1px solid #F1F5F9"}})),
+            todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Hari ini"})
+          ),
+          rows.length === 0
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, 'Belum ada project. Klik "Tambah Project".')
+            : filteredRows.length === 0
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "Tidak ada project yang cocok dengan filter.")
+            : filteredRows.map((row, i) => {
+              const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
+              return h("div", { key:row.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
+                h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
+                  h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, i+1),
+                  PL_COLS.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px" } },
+                    plCellEditor(c.key, row, (field, val) => onUpdate(row.id, field, val))
+                  )),
+                  h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
+                    h("button", { onClick:()=>onRemove(row.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                  )
+                ),
+                h("div", { style:{ width:TIMELINE_W, position:"relative", height:38 } },
+                  h(TimelineBar, { startDate:row.startDate, endDate:row.endDate, colorSeed:i })
+                )
+              );
+            })
+        )
+      )
+    )
+  );
+}
+
+function ProjectListView({ projectList, onAdd, onUpdate, onRemove, sortConfig, onSort, onImport, onExport }) {
+  const fileInputRef = useRef(null);
+  const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
+  const handleImportFile = e => {
+    const file = e.target.files[0];
+    if (!file) { e.target.value = ""; return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = new Uint8Array(ev.target.result);
+        const wb = XLSX.read(data, { type:"array", cellDates:true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval:"" });
+        const pick = (row, ...keys) => {
+          for (const k of keys) {
+            if (row[k] !== undefined && row[k] !== "") return row[k];
+            const found = Object.keys(row).find(rk => rk.trim().toLowerCase() === k.toLowerCase());
+            if (found && row[found] !== "") return row[found];
+          }
+          return "";
+        };
+        const toISODate = v => {
+          if (!v) return "";
+          if (v instanceof Date) {
+            const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,"0"), d = String(v.getDate()).padStart(2,"0");
+            return `${y}-${m}-${d}`;
+          }
+          const d2 = new Date(v);
+          return isNaN(d2.getTime()) ? "" : d2.toISOString().slice(0,10);
+        };
+        const imported = rows.map(row => ({
+          id: uid(),
+          application: String(pick(row,"Application") || ""),
+          project: String(pick(row,"Project") || ""),
+          startDate: toISODate(pick(row,"Start Date","StartDate")),
+          endDate: toISODate(pick(row,"End Date","EndDate")),
+          tpo: String(pick(row,"TPO") || ""),
+          deliveryLead: String(pick(row,"Delivery Lead","DeliveryLead") || ""),
+          priority: String(pick(row,"Priority") || ""),
+          phase: String(pick(row,"Phase") || ""),
+        })).filter(r => r.application || r.project);
+        if (imported.length === 0) alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Application atau Project terisi.");
+        else { onImport(imported); alert(`${imported.length} project berhasil diimpor.`); }
+      } catch (err) {
+        alert("Gagal membaca file. Pastikan formatnya sesuai template (.xlsx).");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project List"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Daftar master seluruh project beserta jadwal mingguannya.")
+      ),
+      h("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
+        h("button", { className:"btn", onClick:triggerImport }, h(Icon.upload,{}), "Import"),
+        h("input", { ref:fileInputRef, type:"file", accept:".xlsx,.xls", onChange:handleImportFile, style:{ display:"none" } }),
+        h("button", { className:"btn btn-outline", onClick:onExport }, h(Icon.download,{}), "Export"),
+        h("button", { className:"btn btn-primary", onClick:onAdd }, h(Icon.plus,{}), "Tambah Project")
+      )
+    ),
+    h("div", { className:"card", style:{ padding:16 } },
+      h(ProjectListTable, { rows: projectList, onUpdate, onRemove, sortConfig, onSort })
+    )
+  );
+}
+
+/* =========================================================================
+   PROJECT TRACKER (DETAIL)
+   ========================================================================= */
+const COLS = [
+  { key:"no", label:"No", width:44 },
+  { key:"task", label:"Task", width:210 },
+  { key:"startDate", label:"Start Date", width:124 },
+  { key:"endDate", label:"End Date", width:124 },
+  { key:"pic", label:"PIC", width:130 },
+  { key:"status", label:"Status", width:126 },
+  { key:"priority", label:"Priority", width:104 },
+  { key:"phase", label:"Phase", width:150 },
+  { key:"notes", label:"Notes", width:230 },
+  { key:"action", label:"", width:40 },
+];
+const COL_BY_KEY = Object.fromEntries(COLS.map(c => [c.key, c]));
+const DEFAULT_TASK_ORDER = COLS.filter(c => c.key !== "no" && c.key !== "action").map(c => c.key);
+
+function cellEditor(colKey, task, onUpdate, picListId) {
+  const textStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
+  const dateStyle = { width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"5px 6px", outline:"none" };
+  switch (colKey) {
+    case "task": return h("input", { value: task.task||"", onChange:e=>onUpdate("task", e.target.value), placeholder:"Nama task\u2026", style:textStyle });
+    case "startDate": return h("input", { type:"date", value: task.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
+    case "endDate": return h("input", { type:"date", value: task.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
+    case "pic": return h("input", { value: task.pic||"", onChange:e=>onUpdate("pic", e.target.value), list:picListId, placeholder:"PIC", style:textStyle });
+    case "status": return h(RagSelect, { value: task.status, options: STATUS_OPTS, bgMap: STATUS_BG, fgMap: STATUS_FG, strikeValues:["Cancelled"], onChange: v => onUpdate("status", v) });
+    case "priority": return h(RagSelect, { value: task.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
+    case "phase": return h(RagSelect, { value: task.phase, options: PHASE_OPTS, bgMap: PHASE_BG, fgMap: PHASE_FG, onChange: v => onUpdate("phase", v) });
+    case "notes": return h("input", { value: task.notes||"", onChange:e=>onUpdate("notes", e.target.value), placeholder:"Catatan\u2026", style:textStyle });
+    default: return null;
+  }
+}
+
+function SortableHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, onFilterChange }) {
+  const active = sortConfig.key === col.key;
+  return h("div", {
+    style: { width: col.width, padding:"10px 8px", display:"flex", alignItems:"center", gap:5, userSelect:"none", fontSize:12 }
+  },
+    h("span", {
+      onClick: () => onSort(col.key), title:"Klik untuk urutkan",
+      style:{ color:"#fff", fontWeight:600, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }
+    }, col.label),
+    h("span", { onClick: () => onSort(col.key), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
+      active
+        ? (sortConfig.dir === "asc" ? h(Icon.up,{style:{color:"#fff"}}) : h(Icon.down,{style:{color:"#fff"}}))
+        : h(Icon.updown,{style:{color:"#8B9BB4", opacity:.7}})
+    ),
+    h(FilterDropdown, { options:filterOptions, selected:filterSelected, onChange:onFilterChange })
+  );
+}
+
+function ColumnManager({ columnOrder, hiddenColumns, onToggleVisibility, onReorder }) {
+  const [open, setOpen] = useState(false);
+  const dragKey = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [open]);
+  const cols = columnOrder.map(k => COL_BY_KEY[k]).filter(Boolean);
+  return h("div", { style:{ position:"relative" }, onClick: e => e.stopPropagation() },
+    h("button", { className:"btn", onClick: () => setOpen(o=>!o) },
+      h(Icon.columns,{}), "Kelola Kolom"),
+    open && h("div", { style:{ position:"absolute", top:"110%", right:0, background:"#fff", border:"1px solid #E2E8F0", borderRadius:10, boxShadow:"0 10px 25px rgba(0,0,0,0.12)", width:250, maxHeight:340, overflow:"auto", zIndex:40, padding:10 } },
+      h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:6, padding:"0 2px" } }, "Seret untuk urutkan, centang untuk tampilkan/sembunyikan"),
+      cols.map(c => h("div", {
+        key:c.key, draggable:true,
+        onDragStart:()=>{ dragKey.current = c.key; },
+        onDragOver:e=>e.preventDefault(),
+        onDrop:()=>{ if (dragKey.current && dragKey.current !== c.key) onReorder(dragKey.current, c.key); dragKey.current = null; },
+        style:{ display:"flex", alignItems:"center", gap:7, padding:"7px 4px", borderRadius:6, cursor:"grab", fontSize:13 }
+      },
+        h(Icon.grip,{style:{color:"#CBD5E1", flexShrink:0}}),
+        h("input", { type:"checkbox", checked: !hiddenColumns.includes(c.key), onChange:()=>onToggleVisibility(c.key) }),
+        h("span", { style:{ flex:1, fontSize:13, color:"#334155", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, c.label)
+      ))
+    )
+  );
+}
+
+function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onSort, picListId }) {
+  const [filters, setFilters] = useState({});
+  const todayIdx = weekIndex(new Date().toISOString().slice(0,10));
+  const fixedW = 44 + columns.reduce((s,c)=>s+c.width,0) + 40;
+  const colKeys = useMemo(() => columns.map(c => c.key), [columns]);
+
+  const columnOptions = useMemo(() => buildColumnOptions(tasks, colKeys), [tasks, colKeys]);
+  const onFilterChange = (colKey, selected) => setFilters(f => ({ ...f, [colKey]: selected }));
+  const clearAllFilters = () => setFilters({});
+  const filteredTasks = useMemo(() => tasks.filter(t => rowPassesFilters(t, filters, colKeys)), [tasks, filters, colKeys]);
+  const activeFilterCount = Object.values(filters).filter(v => Array.isArray(v)).length;
+
+  return h("div", null,
+    activeFilterCount > 0 && h("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:8, fontSize:12, color:"#64748B" } },
+      h(Icon.filter,{ style:{ color:"#4F9D9D" } }),
+      `${activeFilterCount} filter aktif \u00B7 menampilkan ${filteredTasks.length} dari ${tasks.length} task`,
+      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Hapus semua filter")
+    ),
+    h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
+      h("div", { style:{ minWidth: fixedW + TIMELINE_W } },
+        h("div", { style:{ display:"flex", position:"sticky", top:0, zIndex:6 } },
+          h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:7, background:"#152238" } },
+            h("div", { style:{ width:44, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "No"),
+            columns.map(c => h(SortableHeaderCell, { key:c.key, col:c, sortConfig, onSort,
+              filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
+              onFilterChange: v => onFilterChange(c.key, v) })),
+            h("div", { style:{ width:40 } })
+          ),
+          h("div", { style:{ width:TIMELINE_W, background:"#152238" } }, h(TimelineHeader))
+        ),
+        h("div", { style:{ position:"relative" } },
+          h("div", { style:{ position:"absolute", top:0, left:fixedW, bottom:0, width:TIMELINE_W, pointerEvents:"none" } },
+            MONTH_TICKS.map((t,i)=>h("div",{key:i, style:{position:"absolute", left:t.x, top:0, bottom:0, borderLeft: t.isYearStart ? "2px solid #CBD5E1" : "1px solid #F1F5F9"}})),
+            todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Hari ini"})
+          ),
+          filteredTasks.length === 0
+            ? h("div", { style:{ padding:"36px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "Tidak ada task yang cocok dengan filter.")
+            : filteredTasks.map((task, i) => {
+              const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
+              return h("div", { key:task.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
+                h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
+                  h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, task.no),
+                  columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px" } },
+                    cellEditor(c.key, task, (field, val) => onUpdateTask(task.id, field, val), picListId)
+                  )),
+                  h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
+                    h("button", { onClick:()=>onRemoveTask(task.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                  )
+                ),
+                h("div", { style:{ width:TIMELINE_W, position:"relative", height:38 } },
+                  h(TimelineBar, { startDate:task.startDate, endDate:task.endDate, colorSeed:i })
+                )
+              );
+            })
+        )
+      )
+    )
+  );
+}
+
+/* ---------- To-Do ---------- */
+const TODO_STATUS_OPTS = ["Open","In Progress","Done","Cancelled"];
+const TODO_BLOCKER_OPTS = ["Yes","No"];
+const TODO_BLOCKER_BG = { Yes:"#FEE2E2", No:"#FEF9C3" };
+const TODO_BLOCKER_FG = { Yes:"#991B1B", No:"#854D0E" };
+const TODO_COLS = [
+  { key:"task", label:"Task" },
+  { key:"pic", label:"PIC" },
+  { key:"dueDate", label:"Due Date" },
+  { key:"status", label:"Status" },
+  { key:"blocker", label:"Blocker" },
+];
+const TODO_TOGGLEABLE = ["pic","dueDate","status","blocker"];
+
+function TodoColumnManager({ hiddenColumns, onToggleVisibility }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [open]);
+  return h("div", { style:{ position:"relative" }, onClick: e => e.stopPropagation() },
+    h("button", { className:"btn", onClick: () => setOpen(o=>!o) },
+      h(Icon.columns,{}), "Kelola Tampilan"),
+    open && h("div", { style:{ position:"absolute", top:"110%", right:0, background:"#fff", border:"1px solid #E2E8F0", borderRadius:10, boxShadow:"0 10px 25px rgba(0,0,0,0.12)", width:210, zIndex:40, padding:10 } },
+      h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:6, padding:"0 2px" } }, "Tampilkan/sembunyikan kolom"),
+      TODO_COLS.filter(c => TODO_TOGGLEABLE.includes(c.key)).map(c => h("label", {
+        key:c.key, style:{ display:"flex", alignItems:"center", gap:7, padding:"7px 4px", borderRadius:6, cursor:"pointer" }
+      },
+        h("input", { type:"checkbox", checked: !hiddenColumns.includes(c.key), onChange:()=>onToggleVisibility(c.key) }),
+        h("span", { style:{ fontSize:13, color:"#334155" } }, c.label)
+      ))
+    )
+  );
+}
+
+function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, onFilterChange }) {
+  const active = sortConfig.key === col.key;
+  return h("th", {
+    style: { padding:"10px 10px", textAlign:"left", color:"#fff", fontWeight:600, fontSize:12 }
+  },
+    h("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
+      h("span", { onClick: () => onSort(col.key), title:"Klik untuk urutkan", style:{ cursor:"pointer", flex:1 } }, col.label),
+      h("span", { onClick: () => onSort(col.key), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
+        active
+          ? (sortConfig.dir === "asc" ? h(Icon.up,{style:{color:"#fff"}}) : h(Icon.down,{style:{color:"#fff"}}))
+          : h(Icon.updown,{style:{color:"#8B9BB4", opacity:.7}})
+      ),
+      h(FilterDropdown, { options:filterOptions, selected:filterSelected, onChange:onFilterChange })
+    )
+  );
+}
+
+function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId }) {
+  const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
+  const [filters, setFilters] = useState({});
+  const visibleCols = TODO_COLS.filter(c => c.key === "task" || !hiddenColumns.includes(c.key));
+  const colKeys = useMemo(() => visibleCols.map(c => c.key), [visibleCols]);
+  const tdStyle = { padding:"7px 10px", borderBottom:"1px solid #F1F5F9" };
+
+  const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
+  const onFilterChange = (k, v) => setFilters(f => ({ ...f, [k]: v }));
+  const clearAllFilters = () => setFilters({});
+  const columnOptions = useMemo(() => buildColumnOptions(todos, colKeys), [todos, colKeys]);
+  const activeFilterCount = Object.values(filters).filter(v => Array.isArray(v)).length;
+
+  const filtered = useMemo(() => todos.filter(t => rowPassesFilters(t, filters, colKeys)), [todos, filters, colKeys]);
+
+  const sorted = useMemo(() => {
+    if (!sortConfig.key) return filtered;
+    const sk = sortConfig.key;
+    return [...filtered].sort((a, b) => {
+      const av = String(a[sk] || "").toLowerCase(), bv = String(b[sk] || "").toLowerCase();
+      if (av < bv) return sortConfig.dir === "asc" ? -1 : 1;
+      if (av > bv) return sortConfig.dir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [filtered, sortConfig]);
+
+  return h("div", null,
+    activeFilterCount > 0 && h("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:8, fontSize:12, color:"#64748B" } },
+      h(Icon.filter,{ style:{ color:"#4F9D9D" } }),
+      `${activeFilterCount} filter aktif \u00B7 menampilkan ${sorted.length} dari ${todos.length} Task`,
+      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Hapus semua filter")
+    ),
+    h("div", { style:{ border:"1px solid #E2E8F0", borderRadius:12, overflow:"auto" } },
+      h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+        h("thead", null,
+          h("tr", { style:{ background:"#152238" } },
+            visibleCols.map(c => h(TodoHeaderCell, { key:c.key, col:c, sortConfig, onSort,
+              filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
+              onFilterChange: v => onFilterChange(c.key, v) })),
+            h("th", { style:{ width:40, background:"#152238" } })
+          )
+        ),
+        h("tbody", null,
+          todos.length === 0
+            ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Belum ada Task. Klik "Tambah Task".'))
+          : sorted.length === 0
+            ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Tidak ada Task yang cocok dengan filter.'))
+          : sorted.map((t, i) => h("tr", { key:t.id, style:{ background: i%2===0 ? "#fff" : "#FAFBFC" } },
+              visibleCols.map(c => h("td", { key:c.key, style:tdStyle },
+                c.key === "task" ? h("input", { value:t.task||"", onChange:e=>onUpdate(t.id,"task",e.target.value), placeholder:"Nama task\u2026",
+                    style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
+                c.key === "pic" ? h("input", { value:t.pic||"", onChange:e=>onUpdate(t.id,"pic",e.target.value), list:picListId, placeholder:"PIC",
+                    style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
+                c.key === "dueDate" ? h("input", { type:"date", value:t.dueDate||"", onChange:e=>onUpdate(t.id,"dueDate",e.target.value),
+                    style:{ width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
+                c.key === "status" ? h(RagSelect, { value:t.status, options: TODO_STATUS_OPTS, bgMap: STATUS_BG, fgMap: STATUS_FG, strikeValues:["Cancelled"], onChange:v=>onUpdate(t.id,"status",v) }) :
+                c.key === "blocker" ? h(RagSelect, { value:t.blocker, options: TODO_BLOCKER_OPTS, bgMap: TODO_BLOCKER_BG, fgMap: TODO_BLOCKER_FG, onChange:v=>onUpdate(t.id,"blocker",v) }) :
+                null
+              )),
+              h("td", { style:{ ...tdStyle, textAlign:"center" } },
+                h("button", { onClick:()=>onRemove(t.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+              )
+            ))
+        )
+      )
+    )
+  );
+}
+
+function UpdateLog({ entries, onSubmit, onDelete }) {
+  const [text, setText] = useState("");
+  const submit = () => { const v = text.trim(); if (!v) return; onSubmit(v); setText(""); };
+  const fmt = d => new Date(d).toLocaleString("id-ID", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  const sorted = [...(entries||[])].sort((a,b) => new Date(b.date) - new Date(a.date));
+  return h("div", null,
+    h("div", { style:{ display:"flex", gap:10, marginBottom:16, alignItems:"flex-end" } },
+      h("textarea", { value:text, onChange:e=>setText(e.target.value), placeholder:"Tulis update project\u2026", rows:2,
+        style:{ flex:1, fontSize:13, border:"1px solid #E2E8F0", borderRadius:9, padding:"9px 11px", outline:"none", resize:"vertical" } }),
+      h("button", { className:"btn btn-primary", onClick:submit, style:{ padding:"10px 18px", flexShrink:0 } }, "Submit")
+    ),
+    sorted.length === 0
+      ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"18px 0", textAlign:"center" } }, "Belum ada update yang di-submit untuk project ini.")
+      : h("div", { style:{ display:"flex", flexDirection:"column", gap:11, maxHeight:320, overflow:"auto" } },
+          sorted.map(entry => h("div", { key:entry.id, style:{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, borderLeft:"3px solid #4F9D9D", paddingLeft:11 } },
+            h("div", { style:{ flex:1 } },
+              h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:2 } }, fmt(entry.date)),
+              h("div", { style:{ fontSize:13, color:"#334155", whiteSpace:"pre-wrap" } }, entry.text)
+            ),
+            h("button", { onClick:()=>onDelete(entry.id), title:"Hapus update", style:{ color:"#DC2626", flexShrink:0, padding:2, background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+          ))
+        )
+  );
+}
+
+/* ---------- Application + Project dropdowns (sourced from Project List) ---------- */
+function ProjectSelector({ application, project, onApplicationChange, onProjectChange, projectList }) {
+  const applications = useMemo(() => [...new Set(projectList.map(r => norm(r.application)).filter(Boolean))].sort(), [projectList]);
+  const projectsForApp = useMemo(() => {
+    const scoped = application
+      ? projectList.filter(r => norm(r.application).toLowerCase() === norm(application).toLowerCase())
+      : projectList;
+    return [...new Set(scoped.map(r => norm(r.project)).filter(Boolean))].sort();
+  }, [projectList, application]);
+
+  const selectStyle = { width:"100%", fontSize:13, borderRadius:8, padding:"9px 10px", border:"1px solid #E2E8F0", outline:"none", background:"#fff" };
+
+  return h("div", { className:"card" },
+    h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap" } },
+      h("div", { style:{ flex:"1 1 240px", minWidth:220 } },
+        h("label", { style:{ fontSize:13, color:"#64748B", display:"block", marginBottom:7, fontWeight:500 } }, "Application"),
+        applications.length === 0
+          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"9px 10px", border:"1px dashed #E2E8F0", borderRadius:8 } }, "Belum ada Application di Project List")
+          : h("select", { value: application, onChange: e => { onApplicationChange(e.target.value); onProjectChange(""); }, style: selectStyle },
+              h("option", { value:"" }, "\u2014 pilih Application \u2014"),
+              applications.map(a => h("option", { key:a, value:a }, a))
+            )
+      ),
+      h("div", { style:{ flex:"1 1 260px", minWidth:220 } },
+        h("label", { style:{ fontSize:13, color:"#64748B", display:"block", marginBottom:7, fontWeight:500 } }, "Project"),
+        projectsForApp.length === 0
+          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"9px 10px", border:"1px dashed #E2E8F0", borderRadius:8 } }, "Belum ada Project untuk pilihan ini")
+          : h("select", { value: project, onChange: e => onProjectChange(e.target.value), style: selectStyle },
+              h("option", { value:"" }, "\u2014 pilih Project \u2014"),
+              projectsForApp.map(p => h("option", { key:p, value:p }, p))
+            )
+      )
+    )
+  );
+}
+
+function DetailView({
+  applicationText, projectText, onApplicationChange, onProjectChange, projectList,
+  record, onAddTask, onUpdateTask, onRemoveTask, onImportTasks,
+  visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
+  sortConfig, onSort, sortedTasks,
+  onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
+  onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics
+}) {
+  const fileInputRef = useRef(null);
+  const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
+
+  const downloadTemplate = () => {
+    const rows = [{ No:1, Task:"Contoh: Requirement Gathering", "Start Date":"2026-01-05", "End Date":"2026-01-09", PIC:"Nama PIC" }];
+    const ws = XLSX.utils.json_to_sheet(rows, { header:["No","Task","Start Date","End Date","PIC"] });
+    ws["!cols"] = [{wch:6},{wch:36},{wch:14},{wch:14},{wch:18}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "Template_Project_Timeline.xlsx");
+  };
+
+  const handleImportFile = e => {
+    const file = e.target.files[0];
+    if (!file) { e.target.value = ""; return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = new Uint8Array(ev.target.result);
+        const wb = XLSX.read(data, { type:"array", cellDates:true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval:"" });
+        const pick = (row, ...keys) => {
+          for (const k of keys) {
+            if (row[k] !== undefined && row[k] !== "") return row[k];
+            const found = Object.keys(row).find(rk => rk.trim().toLowerCase() === k.toLowerCase());
+            if (found && row[found] !== "") return row[found];
+          }
+          return "";
+        };
+        const toISODate = v => {
+          if (!v) return "";
+          if (v instanceof Date) {
+            const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,"0"), d = String(v.getDate()).padStart(2,"0");
+            return `${y}-${m}-${d}`;
+          }
+          const d2 = new Date(v);
+          return isNaN(d2.getTime()) ? "" : d2.toISOString().slice(0,10);
+        };
+        const imported = rows.map((row, idx) => ({
+          id: uid(),
+          no: String(pick(row,"No") || idx+1),
+          task: String(pick(row,"Task") || ""),
+          startDate: toISODate(pick(row,"Start Date","StartDate")),
+          endDate: toISODate(pick(row,"End Date","EndDate")),
+          pic: String(pick(row,"PIC") || ""),
+          status: String(pick(row,"Status") || ""),
+          priority: String(pick(row,"Priority") || ""),
+          phase: String(pick(row,"Phase") || ""),
+          notes: String(pick(row,"Notes") || "")
+        })).filter(t => t.task);
+        if (imported.length === 0) alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Task terisi.");
+        else { onImportTasks(imported); alert(`${imported.length} task berhasil diimpor.`); }
+      } catch (err) {
+        alert("Gagal membaca file. Pastikan formatnya sesuai template (.xlsx).");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
+  const exportDetailProject = () => {
+    const cols = visibleColumns.filter(c => c.key !== "action");
+    const header = ["No", ...cols.map(c => c.label)];
+    const rows = sortedTasks.map(t => {
+      const row = { No: t.no };
+      cols.forEach(c => { row[c.label] = t[c.key] || ""; });
+      return row;
+    });
+    const ws = XLSX.utils.json_to_sheet(rows, { header });
+    ws["!cols"] = header.map(hLabel => ({ wch: Math.max(10, Math.min(40, hLabel.length + 6)) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Project Timeline");
+    const infoWs = XLSX.utils.aoa_to_sheet([["Application", applicationText || "-"], ["Project", projectText || "-"]]);
+    XLSX.utils.book_append_sheet(wb, infoWs, "Info");
+    const safe = s => (s || "Untitled").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
+    const date = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `Project_Timeline_${safe(applicationText)}_${safe(projectText)}_${date}.xlsx`);
+  };
+
+  const hasIdentity = norm(applicationText) && norm(projectText);
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project Timeline & Backlog"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola detail task, to-do, dan update mingguan per project.")
+      ),
+      h("div", { style:{ fontSize:12, color:"#94A3B8" } },
+        saveStatus === "saving" ? "Menyimpan\u2026" :
+        saveStatus === "saved" ? "\u2713 Tersimpan di perangkat ini" :
+        saveStatus === "error" ? "Gagal menyimpan" : "\u00A0"
+      )
+    ),
+
+    h(ProjectSelector, {
+      application: applicationText, project: projectText,
+      onApplicationChange, onProjectChange, projectList
+    }),
+
+    !hasIdentity && h("div", { style:{ marginTop:16, fontSize:13, color:"#94A3B8", textAlign:"center", padding:"28px 0" } },
+      "Pilih Application dan Project di atas (data diambil dari menu Project List) untuk mulai mengelola detail task, to-do, dan update."
+    ),
+
+    hasIdentity && h("div", { className:"card", style:{ marginTop:16 } },
+      h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:14 } },
+        h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, "Project Timeline"),
+        h("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
+          h("button", { className:"btn", onClick:downloadTemplate },
+            h(Icon.download,{}), "Download Template"),
+          h("button", { className:"btn btn-outline", onClick:triggerImport },
+            h(Icon.upload,{}), "Import"),
+          h("input", { ref:fileInputRef, type:"file", accept:".xlsx,.xls", onChange:handleImportFile, style:{ display:"none" } }),
+          h("button", { className:"btn btn-outline", onClick:exportDetailProject },
+            h(Icon.download,{}), "Export Project Timeline"),
+          h(ColumnManager, { columnOrder:taskColumnOrder, hiddenColumns:taskHiddenColumns, onToggleVisibility:onToggleColumnVisibility, onReorder:onReorderColumn }),
+          h("button", { className:"btn btn-primary", onClick:onAddTask },
+            h(Icon.plus,{}), "Tambah Task")
+        )
+      ),
+      h("datalist", { id:picListId }, pics.map(p => h("option", { key:p, value:p }))),
+      sortedTasks.length === 0
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } }, 'Belum ada task. Klik "Tambah Task" atau import dari file Excel.')
+        : h(TaskTable, { tasks: sortedTasks, onUpdateTask, onRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId })
+    ),
+
+    hasIdentity && h("div", { className:"card", style:{ marginTop:16 } },
+      h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:14 } },
+        h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155", display:"flex", alignItems:"center", gap:7 } },
+          h(Icon.checklist,{style:{color:"#4F9D9D"}}), "Tasks"),
+        h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
+          h(TodoColumnManager, { hiddenColumns: todoHiddenColumns, onToggleVisibility: onToggleTodoColumn }),
+          h("button", { className:"btn btn-primary", onClick:onAddTodo },
+            h(Icon.plus,{}), "Tambah Task")
+        )
+      ),
+      h(TodoTable, { todos: record.todos || [], onUpdate: onUpdateTodo, onRemove: onRemoveTodo, hiddenColumns: todoHiddenColumns, picListId })
+    ),
+
+    hasIdentity && h("div", { className:"card", style:{ marginTop:16 } },
+      h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155", marginBottom:14 } }, "Notes"),
+      h(UpdateLog, { entries: record.updates || [], onSubmit: onSubmitUpdate, onDelete: onDeleteUpdate })
+    )
+  );
+}
+
+/* =========================================================================
+   SIDEBAR + ROOT APP
+   ========================================================================= */
+const NAV_ITEMS = [
+  { key:"list", label:"Project List", icon:Icon.grid },
+  { key:"detail", label:"Project Timeline & Backlog", icon:Icon.checklist },
+  { key:"document", label:"Document", icon:Icon.file, children:[
+    { key:"doc-baseline", label:"Project Baseline" },
+    { key:"doc-stakeholder", label:"Stakeholder Register" },
+    { key:"doc-risk", label:"Risk & Dependency Log" },
+  ] },
+];
+const DOC_TITLES = Object.fromEntries(
+  NAV_ITEMS.find(i => i.key === "document").children.map(c => [c.key, c.label])
+);
+
+function Sidebar({ active, onNavigate }) {
+  const activeGroup = NAV_ITEMS.find(it => it.children && it.children.some(c => c.key === active));
+  const [expandedGroups, setExpandedGroups] = useState({ document: true });
+  const toggleGroup = key => setExpandedGroups(g => ({ ...g, [key]: !g[key] }));
+
+  return h("div", { style:{ width:246, flexShrink:0, minHeight:"100vh", background:"#152238", position:"sticky", top:0, alignSelf:"flex-start" } },
+    h("div", { style:{ padding:"18px 22px 16px", borderBottom:"1px solid rgba(255,255,255,0.08)", marginBottom:10 } },
+      h("div", { style:{ color:"#fff", fontWeight:600, fontSize:14 } }, "Project Tracker"),
+      h("div", { style:{ color:"#8B9BB4", fontSize:12, marginTop:2 } }, "Delivery Management")
+    ),
+    NAV_ITEMS.map(it => {
+      if (!it.children) {
+        return h("div", {
+          key: it.key, onClick: () => onNavigate(it.key),
+          style: {
+            display:"flex", alignItems:"center", gap:11, padding:"12px 22px", cursor:"pointer",
+            background: active === it.key ? "rgba(255,255,255,0.08)" : "transparent",
+            borderLeft: active === it.key ? "3px solid #4F9D9D" : "3px solid transparent",
+            color: active === it.key ? "#fff" : "#B7C3D6",
+            fontSize:14, fontWeight: active === it.key ? 600 : 500
+          }
+        }, h(it.icon,{}), it.label);
+      }
+      const isExpanded = !!expandedGroups[it.key];
+      const isGroupHighlighted = !!activeGroup && activeGroup.key === it.key;
+      return h("div", { key: it.key },
+        h("div", {
+          onClick: () => toggleGroup(it.key),
+          style: {
+            display:"flex", alignItems:"center", gap:11, padding:"12px 22px", cursor:"pointer",
+            background: isGroupHighlighted ? "rgba(255,255,255,0.05)" : "transparent",
+            borderLeft: "3px solid transparent",
+            color: isGroupHighlighted ? "#fff" : "#B7C3D6",
+            fontSize:14, fontWeight: isGroupHighlighted ? 600 : 500
+          }
+        },
+          h(it.icon,{}),
+          h("span", { style:{ flex:1 } }, it.label),
+          h(isExpanded ? Icon.down : Icon.chevronRight, { style:{ color:"#8B9BB4", flexShrink:0 } })
+        ),
+        isExpanded && it.children.map(child => h("div", {
+          key: child.key, onClick: () => onNavigate(child.key),
+          style: {
+            display:"flex", alignItems:"center", gap:11, padding:"10px 22px 10px 46px", cursor:"pointer",
+            background: active === child.key ? "rgba(255,255,255,0.08)" : "transparent",
+            borderLeft: active === child.key ? "3px solid #4F9D9D" : "3px solid transparent",
+            color: active === child.key ? "#fff" : "#8FA0BC",
+            fontSize:13, fontWeight: active === child.key ? 600 : 500
+          }
+        }, child.label))
+      );
+    })
+  );
+}
+
+function DocumentPlaceholderView({ title }) {
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, title),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Halaman ini akan segera tersedia.")
+    ),
+    h("div", { className:"card", style:{ padding:"64px 24px", textAlign:"center" } },
+      h(Icon.file, { style:{ fontSize:26, color:"#CBD5E1" } }),
+      h("div", { style:{ fontSize:13, color:"#94A3B8", marginTop:10 } }, "Belum ada konten untuk menu ini.")
+    )
+  );
+}
+
+const BASELINE_SECTIONS = [
+  { key:"charter", label:"Project Charter" },
+  { key:"benefit", label:"Benefit Register" },
+  { key:"upload", label:"Upload Document" },
+];
+
+const CHARTER_FIELDS = {
+  background: { label:"Project Background", hint:"Business reasons (problem or opportunities)." },
+  objective: { label:"Project Objective", hint:"Detailed statements that describe the specific, tangible products or services that the project will deliver and outline the desired outcome of the project. Objectives should be SMART i.e., Specific, Measurable, Attainable, Realistic and Time bound." },
+  successCriteria: { label:"Success Criteria", hint:"Define and describe the measurable terms of what constitutes project success for all stakeholders and impacted users." },
+  scope: { label:"Project Scope", hint:"Define the specific work that needs to be accomplished to deliver the project, including its boundaries e.g. boundaries by brand, channel, segmentation." },
+  outsideScope: { label:"Outside Scope", hint:"Activities outside the project boundaries are out of scope and should be listed here to avoid confusion and future conflict." },
+  deliverables: { label:"Project Deliverables", hint:"The output of the project." },
+  benefitAnalysis: { label:"Benefit Analysis or Cost of Doing Nothing", hint:"Provide and clearly articulate the benefits that are expected to result from completion of the project or costs that will arise when a solution does not exist." },
+  timeline: { label:"Timeline & Milestone", hint:"Provide a list of the milestones associated with the project, e.g. estimated to have the solution." },
+  assumptions: { label:"Assumptions & Constraint*", hint:"List and describe key assumptions or constraints that contribute to the scope, schedule, and budget of this project." },
+  risk: { label:"High Level Risk & Mitigation*", hint:"Describe any key risks to the project, along with corresponding impact and mitigation plans to prevent those risks from being realized." },
+  stakeholders: { label:"Key Stakeholders", hint:"Stakeholders who have the influence and authority to dictate whether a project is considered a success or not." },
+};
+
+function CharterField({ label, hint, value, onChange, minHeight }) {
+  return h("div", { style:{ padding:"14px 16px", display:"flex", flexDirection:"column", gap:6, height:"100%" } },
+    h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E293B", textDecoration:"underline", textUnderlineOffset:"2px" } }, label),
+    h("textarea", {
+      value: value || "", onChange: e => onChange(e.target.value), placeholder: hint,
+      style:{ flex:1, minHeight: minHeight || 70, width:"100%", border:"none", background:"transparent", resize:"vertical",
+        outline:"none", fontSize:13, color:"#334155", fontFamily:"inherit", lineHeight:1.5 }
+    })
+  );
+}
+
+function ProjectCharterForm({ charter, onUpdateField }) {
+  const v = key => (charter && charter[key]) || "";
+  const field = (key, minHeight) => h(CharterField, {
+    label: CHARTER_FIELDS[key].label, hint: CHARTER_FIELDS[key].hint,
+    value: v(key), onChange: val => onUpdateField(key, val), minHeight
+  });
+  const cellBorder = "1px solid #C7DAEF";
+
+  return h("div", { style:{ border: cellBorder, borderRadius:10, overflow:"hidden", marginTop:4, background:"#fff" } },
+    h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:16, padding:"14px 16px", borderBottom: cellBorder, flexWrap:"wrap" } },
+      h("input", {
+        value: v("projectTitle"), onChange:e=>onUpdateField("projectTitle", e.target.value), placeholder:"Project Title",
+        style:{ fontSize:20, fontWeight:800, color:"#1E3A5F", border:"none", outline:"none", flex:"1 1 260px", background:"transparent" }
+      }),
+      h("div", { style:{ display:"flex", alignItems:"center", gap:6, flexShrink:0 } },
+        h("span", { style:{ fontSize:12, color:"#64748B", fontWeight:600 } }, "TPO:"),
+        h("input", {
+          value: v("tpo"), onChange:e=>onUpdateField("tpo", e.target.value), placeholder:"Nama TPO",
+          style:{ fontSize:12, border:"1px solid #E2E8F0", borderRadius:6, padding:"5px 8px", outline:"none", width:170 }
+        })
+      )
+    ),
+    h("div", {
+      style:{
+        display:"grid",
+        gridTemplateColumns:"1fr 1fr 1.05fr",
+        gridTemplateAreas: `
+          "background background background"
+          "objective objective success"
+          "scope deliver benefit"
+          "outside deliver benefit"
+          "timeline timeline benefit"
+          "assumptions risk stakeholders"
+        `
+      }
+    },
+      h("div", { style:{ gridArea:"background", background:"#EAF1F8", borderBottom:cellBorder } }, field("background", 60)),
+      h("div", { style:{ gridArea:"objective", background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } }, field("objective", 90)),
+      h("div", { style:{ gridArea:"success", background:"#DCE9F7", borderBottom:cellBorder } }, field("successCriteria", 90)),
+      h("div", { style:{ gridArea:"scope", background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } }, field("scope", 70)),
+      h("div", { style:{ gridArea:"outside", background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } }, field("outsideScope", 60)),
+      h("div", { style:{ gridArea:"deliver", background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } }, field("deliverables", 230)),
+      h("div", { style:{ gridArea:"benefit", background:"#EAF1F8", borderBottom:cellBorder } }, field("benefitAnalysis", 230)),
+      h("div", { style:{ gridArea:"timeline", background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } }, field("timeline", 110)),
+      h("div", { style:{ gridArea:"assumptions", background:"#EAF1F8", borderRight:cellBorder } }, field("assumptions", 90)),
+      h("div", { style:{ gridArea:"risk", background:"#EAF1F8", borderRight:cellBorder } }, field("risk", 90)),
+      h("div", { style:{ gridArea:"stakeholders", background:"#EAF1F8" } }, field("stakeholders", 90))
+    )
+  );
+}
+
+function BaselineSection({ section, expanded, onToggle }) {
+  return h("div", { className:"card", style:{ marginTop:16 } },
+    h("div", {
+      onClick: () => onToggle(section.key),
+      style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+    },
+      h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
+      h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+    ),
+    expanded && h("div", { style:{ padding:"44px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } },
+      "Belum ada konten untuk bagian ini."
+    )
+  );
+}
+
+function ProjectBaselineView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, charter, onUpdateCharterField }) {
+  const [expandedSections, setExpandedSections] = useState({ charter:true, benefit:true, upload:true });
+  const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
+  const hasIdentity = norm(applicationText) && norm(projectText);
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project Baseline"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Dokumen baseline per project: Project Charter, Benefit Register, dan Upload Document.")
+    ),
+
+    h(ProjectSelector, { application: applicationText, project: projectText, onApplicationChange, onProjectChange, projectList }),
+
+    !hasIdentity && h("div", { style:{ marginTop:16, fontSize:13, color:"#94A3B8", textAlign:"center", padding:"28px 0" } },
+      "Pilih Application dan Project di atas (data diambil dari menu Project List) untuk mengelola Project Baseline."
+    ),
+
+    hasIdentity && BASELINE_SECTIONS.map(section => {
+      const expanded = !!expandedSections[section.key];
+      if (section.key === "charter") {
+        return h("div", { key:section.key, className:"card", style:{ marginTop:16 } },
+          h("div", {
+            onClick: () => toggleSection(section.key),
+            style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+          },
+            h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
+            h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+          ),
+          expanded && h(ProjectCharterForm, { charter, onUpdateField: onUpdateCharterField })
+        );
+      }
+      return h(BaselineSection, { key:section.key, section, expanded, onToggle: toggleSection });
+    })
+  );
+}
+
+function AppRoot() {
+  const stored = loadState() || {};
+  const [activeView, setActiveView] = useState(stored.activeView || "list");
+  const [projectList, setProjectList] = useState(stored.projectList || []);
+  const [records, setRecords] = useState(stored.records || {});
+  const [baselineRecords, setBaselineRecords] = useState(stored.baselineRecords || {});
+  const [applicationText, setApplicationText] = useState(stored.lastApplication || "");
+  const [projectText, setProjectText] = useState(stored.lastProject || "");
+  const [baselineApplicationText, setBaselineApplicationText] = useState(stored.lastBaselineApplication || "");
+  const [baselineProjectText, setBaselineProjectText] = useState(stored.lastBaselineProject || "");
+  const [taskColumnOrder, setTaskColumnOrder] = useState(stored.taskColumnOrder || DEFAULT_TASK_ORDER);
+  const [taskHiddenColumns, setTaskHiddenColumns] = useState(stored.taskHiddenColumns || []);
+  const [todoHiddenColumns, setTodoHiddenColumns] = useState(stored.todoHiddenColumns || []);
+  const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
+  const [plSortConfig, setPlSortConfig] = useState({ key:null, dir:"asc" });
+  const [saveStatus, setSaveStatus] = useState("idle");
+  const mounted = useRef(false);
+  const picListId = "pic-suggest";
+
+  const key = useMemo(() => makeKey(applicationText, projectText), [applicationText, projectText]);
+  const record = records[key] || { tasks:[], todos:[], updates:[] };
+
+  const updateRecord = updater => {
+    setRecords(prev => {
+      const cur = prev[key] || { tasks:[], todos:[], updates:[] };
+      const next = updater(cur);
+      return { ...prev, [key]: { ...next, application: applicationText, project: projectText } };
+    });
+  };
+
+  const baselineKey = useMemo(() => makeKey(baselineApplicationText, baselineProjectText), [baselineApplicationText, baselineProjectText]);
+  const baselineRecord = baselineRecords[baselineKey] || { charter:{}, benefit:{}, documents:[] };
+  const updateBaselineRecord = updater => {
+    setBaselineRecords(prev => {
+      const cur = prev[baselineKey] || { charter:{}, benefit:{}, documents:[] };
+      const next = updater(cur);
+      return { ...prev, [baselineKey]: { ...next, application: baselineApplicationText, project: baselineProjectText } };
+    });
+  };
+  const onUpdateCharterField = (field, value) => updateBaselineRecord(cur => ({ ...cur, charter: { ...(cur.charter || {}), [field]: value } }));
+
+  useEffect(() => {
+    if (!mounted.current) { mounted.current = true; return; }
+    setSaveStatus("saving");
+    const t = setTimeout(() => {
+      const ok = saveState({
+        activeView, projectList, records, baselineRecords, lastApplication: applicationText, lastProject: projectText,
+        lastBaselineApplication: baselineApplicationText, lastBaselineProject: baselineProjectText,
+        taskColumnOrder, taskHiddenColumns, todoHiddenColumns
+      });
+      setSaveStatus(ok ? "saved" : "error");
+    }, 400);
+    return () => clearTimeout(t);
+  }, [activeView, projectList, records, baselineRecords, applicationText, projectText, baselineApplicationText, baselineProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns]);
+
+  /* ---- Project List CRUD ---- */
+  const onAddProjectRow = () => setProjectList(list => [...list, {
+    id: uid(), application:"", project:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:""
+  }]);
+  const onUpdateProjectRow = (id, field, value) => setProjectList(list => list.map(r => r.id === id ? { ...r, [field]: value } : r));
+  const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
+  const onImportProjectRows = rows => setProjectList(list => [...list, ...rows]);
+  const onPlSort = k => setPlSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
+  const sortedProjectList = useMemo(() => {
+    if (!plSortConfig.key) return projectList;
+    const sk = plSortConfig.key;
+    return [...projectList].sort((a,b) => {
+      const av = String(a[sk]||"").toLowerCase(), bv = String(b[sk]||"").toLowerCase();
+      if (av < bv) return plSortConfig.dir === "asc" ? -1 : 1;
+      if (av > bv) return plSortConfig.dir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [projectList, plSortConfig]);
+  const onExportProjectList = () => {
+    const header = ["No", ...PL_COLS.map(c => c.label)];
+    const rows = sortedProjectList.map((r, i) => {
+      const row = { No: i+1 };
+      PL_COLS.forEach(c => { row[c.label] = r[c.key] || ""; });
+      return row;
+    });
+    const ws = XLSX.utils.json_to_sheet(rows, { header });
+    ws["!cols"] = header.map(hLabel => ({ wch: Math.max(10, Math.min(40, hLabel.length + 6)) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Project List");
+    XLSX.writeFile(wb, `Project_List_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  /* ---- Detail task/todo/update CRUD ---- */
+  const visibleColumns = useMemo(
+    () => taskColumnOrder.filter(k => !taskHiddenColumns.includes(k) && COL_BY_KEY[k]).map(k => COL_BY_KEY[k]),
+    [taskColumnOrder, taskHiddenColumns]
+  );
+  const sortedTasks = useMemo(() => {
+    const tasks = record.tasks || [];
+    if (!sortConfig.key) return tasks;
+    const sk = sortConfig.key;
+    return [...tasks].sort((a, b) => {
+      const av = String(a[sk] || "").toLowerCase(), bv = String(b[sk] || "").toLowerCase();
+      if (av < bv) return sortConfig.dir === "asc" ? -1 : 1;
+      if (av > bv) return sortConfig.dir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [record.tasks, sortConfig]);
+  const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
+
+  const onAddTask = () => updateRecord(cur => {
+    const list = cur.tasks || [];
+    const maxNo = Math.max(0, ...list.map(t => parseInt(t.no) || 0));
+    const task = { id: uid(), no: String(maxNo + 1), task:"", startDate:"", endDate:"", pic:"", status:"", priority:"", phase:"", notes:"" };
+    return { ...cur, tasks: [...list, task] };
+  });
+  const onUpdateTask = (taskId, field, value) => updateRecord(cur => ({
+    ...cur, tasks: (cur.tasks || []).map(t => t.id === taskId ? { ...t, [field]: value } : t)
+  }));
+  const onRemoveTask = taskId => updateRecord(cur => ({ ...cur, tasks: (cur.tasks || []).filter(t => t.id !== taskId) }));
+  const onImportTasks = newTasks => updateRecord(cur => ({ ...cur, tasks: [...(cur.tasks || []), ...newTasks] }));
+
+  const onAddTodo = () => updateRecord(cur => ({
+    ...cur, todos: [...(cur.todos || []), { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"" }]
+  }));
+  const onUpdateTodo = (todoId, field, value) => updateRecord(cur => ({
+    ...cur, todos: (cur.todos || []).map(t => t.id === todoId ? { ...t, [field]: value } : t)
+  }));
+  const onRemoveTodo = todoId => updateRecord(cur => ({ ...cur, todos: (cur.todos || []).filter(t => t.id !== todoId) }));
+  const onToggleTodoColumn = colKey => setTodoHiddenColumns(c => c.includes(colKey) ? c.filter(k => k !== colKey) : [...c, colKey]);
+
+  const onSubmitUpdate = text => {
+    const v = (text || "").trim();
+    if (!v) return;
+    updateRecord(cur => ({ ...cur, updates: [...(cur.updates || []), { id: uid(), text: v, date: new Date().toISOString() }] }));
+  };
+  const onDeleteUpdate = entryId => updateRecord(cur => ({ ...cur, updates: (cur.updates || []).filter(e => e.id !== entryId) }));
+
+  const onToggleColumnVisibility = colKey => setTaskHiddenColumns(c => c.includes(colKey) ? c.filter(k => k !== colKey) : [...c, colKey]);
+  const onReorderColumn = (dragKey, dropKey) => {
+    setTaskColumnOrder(order => {
+      const arr = [...order];
+      const from = arr.indexOf(dragKey), to = arr.indexOf(dropKey);
+      if (from === -1 || to === -1) return order;
+      arr.splice(from, 1); arr.splice(to, 0, dragKey);
+      return arr;
+    });
+  };
+
+  const pics = useMemo(() => {
+    const set = new Set();
+    Object.values(records).forEach(r => {
+      (r.tasks||[]).forEach(t => t.pic && set.add(t.pic));
+      (r.todos||[]).forEach(t => t.pic && set.add(t.pic));
+    });
+    projectList.forEach(r => { r.tpo && set.add(r.tpo); r.deliveryLead && set.add(r.deliveryLead); });
+    return [...set].sort();
+  }, [records, projectList]);
+
+  return h("div", { style:{ display:"flex", minHeight:"100vh", background:"#F3F5F8" } },
+    h(Sidebar, { active: activeView, onNavigate: setActiveView }),
+    h("div", { style:{ flex:1, minWidth:0 } },
+      activeView === "list"
+        ? h(ProjectListView, {
+            projectList: sortedProjectList, onAdd: onAddProjectRow, onUpdate: onUpdateProjectRow, onRemove: onRemoveProjectRow,
+            sortConfig: plSortConfig, onSort: onPlSort, onImport: onImportProjectRows, onExport: onExportProjectList
+          })
+        : activeView === "detail"
+        ? h(DetailView, {
+            applicationText, projectText, onApplicationChange: setApplicationText, onProjectChange: setProjectText, projectList,
+            record, onAddTask, onUpdateTask, onRemoveTask, onImportTasks,
+            visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
+            sortConfig, onSort, sortedTasks,
+            onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
+            onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics
+          })
+        : DOC_TITLES[activeView]
+        ? (activeView === "doc-baseline"
+            ? h(ProjectBaselineView, {
+                applicationText: baselineApplicationText, projectText: baselineProjectText,
+                onApplicationChange: setBaselineApplicationText, onProjectChange: setBaselineProjectText,
+                projectList, charter: baselineRecord.charter, onUpdateCharterField
+              })
+            : h(DocumentPlaceholderView, { title: DOC_TITLES[activeView] }))
+        : null
+    )
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(h(AppRoot));
+</script>
+</body>
+</html>
