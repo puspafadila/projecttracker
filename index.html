@@ -66,6 +66,9 @@ const Icon = {
   filter: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polygon",{points:"22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"})),
   file: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"}), h("polyline",{points:"14 2 14 8 20 8"})),
   chevronRight: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"9 18 15 12 9 6"})),
+  check: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"3", strokeLinecap:"round", strokeLinejoin:"round"}, h("polyline",{points:"20 6 9 17 4 12"})),
+  database: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("ellipse",{cx:12,cy:5,rx:9,ry:3}), h("path",{d:"M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"}), h("path",{d:"M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"})),
+  users: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"}), h("circle",{cx:9,cy:7,r:4}), h("path",{d:"M23 21v-2a4 4 0 0 0-3-3.87"}), h("path",{d:"M16 3.13a4 4 0 0 1 0 7.75"})),
 };
 
 const PALETTE = ["#1E3A5F","#2E6F95","#4F9D9D","#8FBF9F","#D9A441","#C1666B","#7C6A8E","#4A5568"];
@@ -136,6 +139,24 @@ const PRIORITY_FG = { Critical:"#991B1B", High:"#C2410C", Med:"#854D0E", Low:"#3
 const PHASE_OPTS = ["Initiation","Planning","Design","Development","Testing","UAT","Deployment","Closed"];
 const PHASE_BG = { Initiation:"#E0E7FF", Planning:"#DBEAFE", Design:"#CFFAFE", Development:"#DCFCE7", Testing:"#FEF9C3", UAT:"#FFEDD5", Deployment:"#FCE7F3", Closed:"#E5E7EB" };
 const PHASE_FG = { Initiation:"#3730A3", Planning:"#1D4ED8", Design:"#0E7490", Development:"#166534", Testing:"#854D0E", UAT:"#C2410C", Deployment:"#9D174D", Closed:"#374151" };
+/* Badge color palette used to render the Project List "Phase" dropdown,
+   whose options come dynamically from Master Data Management. Colors cycle
+   through this palette by list position, so any phase the user adds there
+   gets a distinct badge automatically. */
+const PHASE_BADGE_PALETTE = [
+  { bg:"#E0E7FF", fg:"#3730A3" }, { bg:"#DBEAFE", fg:"#1D4ED8" }, { bg:"#CFFAFE", fg:"#0E7490" },
+  { bg:"#DCFCE7", fg:"#166534" }, { bg:"#FEF9C3", fg:"#854D0E" }, { bg:"#FFEDD5", fg:"#C2410C" },
+  { bg:"#FCE7F3", fg:"#9D174D" }, { bg:"#E5E7EB", fg:"#374151" }, { bg:"#D1FAE5", fg:"#065F46" },
+  { bg:"#EDE9FE", fg:"#5B21B6" },
+];
+function buildPhaseColorMaps(phaseOptions) {
+  const bg = {}, fg = {};
+  (phaseOptions || []).forEach((label, i) => {
+    const c = PHASE_BADGE_PALETTE[i % PHASE_BADGE_PALETTE.length];
+    bg[label] = c.bg; fg[label] = c.fg;
+  });
+  return { bg, fg };
+}
 
 function RagSelect({ value, options, bgMap, fgMap, onChange, strikeValues }) {
   const bg = value ? (bgMap[value] || "#F1F5F9") : "#fff";
@@ -247,8 +268,13 @@ function rowPassesFilters(row, filters, colKeys) {
    PROJECT LIST (master table)
    ========================================================================= */
 const PL_COLS = [
+  { key:"mountain", label:"Mountain", width:140 },
+  { key:"stream", label:"Stream", width:140 },
+  { key:"subStream", label:"Sub Stream", width:140 },
   { key:"application", label:"Application", width:170 },
+  { key:"deliveryModel", label:"Delivery Model", width:140 },
   { key:"project", label:"Project", width:210 },
+  { key:"resource", label:"Resource", width:160 },
   { key:"startDate", label:"Start Date", width:126 },
   { key:"endDate", label:"End Date", width:126 },
   { key:"tpo", label:"TPO", width:150 },
@@ -257,18 +283,34 @@ const PL_COLS = [
   { key:"phase", label:"Phase", width:150 },
 ];
 
-function plCellEditor(colKey, row, onUpdate) {
-  const textStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
-  const dateStyle = { width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"5px 6px", outline:"none" };
+function StaticBadge({ value, bgMap, fgMap }) {
+  if (!value) return h("span", { style:{ fontSize:13, color:"#CBD5E1" } }, "\u2014");
+  const bg = (bgMap && bgMap[value]) || "#F1F5F9";
+  const fg = (fgMap && fgMap[value]) || "#475569";
+  return h("span", { style:{ display:"inline-block", fontSize:12, fontWeight:600, padding:"4px 10px", borderRadius:7, background:bg, color:fg } }, value);
+}
+
+function plCellDisplay(colKey, row, phaseMeta, onOpenWizard) {
+  const textStyle = { fontSize:13, color:"#334155" };
   switch (colKey) {
-    case "application": return h("input", { value: row.application||"", onChange:e=>onUpdate("application", e.target.value), placeholder:"Nama aplikasi\u2026", style:textStyle });
-    case "project": return h("input", { value: row.project||"", onChange:e=>onUpdate("project", e.target.value), placeholder:"Nama project\u2026", style:textStyle });
-    case "startDate": return h("input", { type:"date", value: row.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
-    case "endDate": return h("input", { type:"date", value: row.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
-    case "tpo": return h("input", { value: row.tpo||"", onChange:e=>onUpdate("tpo", e.target.value), placeholder:"TPO", style:textStyle });
-    case "deliveryLead": return h("input", { value: row.deliveryLead||"", onChange:e=>onUpdate("deliveryLead", e.target.value), placeholder:"Delivery Lead", style:textStyle });
-    case "priority": return h(RagSelect, { value: row.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
-    case "phase": return h(RagSelect, { value: row.phase, options: PHASE_OPTS, bgMap: PHASE_BG, fgMap: PHASE_FG, onChange: v => onUpdate("phase", v) });
+    case "mountain": return h("span", { style:textStyle }, row.mountain || "\u2014");
+    case "stream": return h("span", { style:textStyle }, row.stream || "\u2014");
+    case "subStream": return h("span", { style:textStyle }, row.subStream || "\u2014");
+    case "application": return h("span", { style:textStyle }, row.application || "\u2014");
+    case "deliveryModel": return h("span", { style:textStyle }, row.deliveryModel || "\u2014");
+    case "project": return row.project
+      ? h("button", {
+          onClick: () => onOpenWizard(row.application, row.project), title:"Buka Timeline, PMO, dan Change Management",
+          style:{ ...textStyle, background:"none", border:"none", padding:0, margin:0, fontFamily:"inherit", color:"#1E3A5F", fontWeight:600, textDecoration:"underline", cursor:"pointer", textAlign:"left" }
+        }, row.project)
+      : h("span", { style:textStyle }, "\u2014");
+    case "resource": return h("span", { style:textStyle }, row.resource || "\u2014");
+    case "startDate": return h("span", { style:{ ...textStyle, fontSize:12 } }, row.startDate || "\u2014");
+    case "endDate": return h("span", { style:{ ...textStyle, fontSize:12 } }, row.endDate || "\u2014");
+    case "tpo": return h("span", { style:textStyle }, row.tpo || "\u2014");
+    case "deliveryLead": return h("span", { style:textStyle }, row.deliveryLead || "\u2014");
+    case "priority": return h(StaticBadge, { value: row.priority, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG });
+    case "phase": return h(StaticBadge, { value: row.phase, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg });
     default: return null;
   }
 }
@@ -293,10 +335,14 @@ function PlHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, 
 
 const PL_COL_KEYS = PL_COLS.map(c => c.key);
 
-function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort }) {
+function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard }) {
   const [filters, setFilters] = useState({});
   const todayIdx = weekIndex(new Date().toISOString().slice(0,10));
   const fixedW = 44 + PL_COLS.reduce((s,c)=>s+c.width,0) + 40;
+  const phaseMeta = useMemo(() => {
+    const { bg, fg } = buildPhaseColorMaps(phaseOptions);
+    return { options: phaseOptions || [], bg, fg };
+  }, [phaseOptions]);
 
   const columnOptions = useMemo(() => buildColumnOptions(rows, PL_COL_KEYS), [rows]);
   const onFilterChange = (colKey, selected) => setFilters(f => ({ ...f, [colKey]: selected }));
@@ -328,7 +374,7 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort }) {
             todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Hari ini"})
           ),
           rows.length === 0
-            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, 'Belum ada project. Klik "Tambah Project".')
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, 'Belum ada project. Tambahkan lewat menu "Create Project".')
             : filteredRows.length === 0
             ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "Tidak ada project yang cocok dengan filter.")
             : filteredRows.map((row, i) => {
@@ -336,11 +382,11 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort }) {
               return h("div", { key:row.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
                 h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
                   h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, i+1),
-                  PL_COLS.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px" } },
-                    plCellEditor(c.key, row, (field, val) => onUpdate(row.id, field, val))
+                  PL_COLS.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px", display:"flex", alignItems:"center", minHeight:34 } },
+                    plCellDisplay(c.key, row, phaseMeta, onOpenWizard)
                   )),
                   h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
-                    h("button", { onClick:()=>onRemove(row.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                    h("button", { onClick:()=>onRemove(row.id), title:"Hapus project", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
                   )
                 ),
                 h("div", { style:{ width:TIMELINE_W, position:"relative", height:38 } },
@@ -354,7 +400,7 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort }) {
   );
 }
 
-function ProjectListView({ projectList, onAdd, onUpdate, onRemove, sortConfig, onSort, onImport, onExport }) {
+function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, onOpenWizard }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
   const handleImportFile = e => {
@@ -409,17 +455,16 @@ function ProjectListView({ projectList, onAdd, onUpdate, onRemove, sortConfig, o
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project List"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Daftar master seluruh project beserta jadwal mingguannya.")
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Daftar master seluruh project beserta jadwal mingguannya. Klik nama Project untuk mengisi Timeline, PMO, dan Change Management.")
       ),
       h("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
         h("button", { className:"btn", onClick:triggerImport }, h(Icon.upload,{}), "Import"),
         h("input", { ref:fileInputRef, type:"file", accept:".xlsx,.xls", onChange:handleImportFile, style:{ display:"none" } }),
-        h("button", { className:"btn btn-outline", onClick:onExport }, h(Icon.download,{}), "Export"),
-        h("button", { className:"btn btn-primary", onClick:onAdd }, h(Icon.plus,{}), "Tambah Project")
+        h("button", { className:"btn btn-outline", onClick:onExport }, h(Icon.download,{}), "Export")
       )
     ),
     h("div", { className:"card", style:{ padding:16 } },
-      h(ProjectListTable, { rows: projectList, onUpdate, onRemove, sortConfig, onSort })
+      h(ProjectListTable, { rows: projectList, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard })
     )
   );
 }
@@ -843,7 +888,7 @@ function DetailView({
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:20 } },
       h("div", null,
-        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project Timeline & Backlog"),
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Timeline"),
         h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola detail task, to-do, dan update mingguan per project.")
       ),
       h("div", { style:{ fontSize:12, color:"#94A3B8" } },
@@ -908,17 +953,90 @@ function DetailView({
    SIDEBAR + ROOT APP
    ========================================================================= */
 const NAV_ITEMS = [
+  { key:"create-project", label:"Create Project", icon:Icon.plus },
   { key:"list", label:"Project List", icon:Icon.grid },
-  { key:"detail", label:"Project Timeline & Backlog", icon:Icon.checklist },
-  { key:"document", label:"Document", icon:Icon.file, children:[
-    { key:"doc-baseline", label:"Project Baseline" },
-    { key:"doc-stakeholder", label:"Stakeholder Register" },
-    { key:"doc-risk", label:"Risk & Dependency Log" },
+  { key:"document", label:"Template", icon:Icon.file, children:[
+    { key:"detail", label:"Timeline" },
+    { key:"doc-baseline", label:"PMO" },
+    { key:"doc-stakeholder", label:"Change Management" },
   ] },
+  { key:"master-data", label:"Master Data Management", icon:Icon.database },
+  { key:"user-management", label:"User Management", icon:Icon.users },
 ];
 const DOC_TITLES = Object.fromEntries(
   NAV_ITEMS.find(i => i.key === "document").children.map(c => [c.key, c.label])
 );
+const STANDALONE_PLACEHOLDER_TITLES = Object.fromEntries(
+  NAV_ITEMS.filter(i => !i.children && i.key !== "list" && i.key !== "detail" && i.key !== "create-project").map(i => [i.key, i.label])
+);
+const PLACEHOLDER_TITLES = { ...DOC_TITLES, ...STANDALONE_PLACEHOLDER_TITLES };
+
+function WizardSaveButton({ onSave }) {
+  const [flash, setFlash] = useState(false);
+  const handleClick = () => {
+    if (onSave) onSave();
+    setFlash(true);
+    setTimeout(() => setFlash(false), 1600);
+  };
+  return h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+    flash && h("span", { style:{ fontSize:12, color:"#166534", fontWeight:600 } }, "\u2713 Tersimpan"),
+    h("button", { className:"btn btn-primary", onClick:handleClick }, "Save")
+  );
+}
+
+const WIZARD_STEPS = [
+  { n:1, label:"Timeline" },
+  { n:2, label:"PMO" },
+  { n:3, label:"Change Management" },
+];
+
+function ProjectWizardView({ step, onStepChange, onExit, application, project, timelineProps, pmoProps, cmProps }) {
+  return h("div", null,
+    h("div", {
+      style:{ position:"sticky", top:0, zIndex:20, background:"#fff", borderBottom:"1px solid #E2E8F0",
+        padding:"14px 28px", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }
+    },
+      h("div", { style:{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" } },
+        h("button", {
+          onClick:onExit,
+          style:{ display:"flex", alignItems:"center", gap:6, fontSize:12, fontWeight:600, color:"#334155", background:"none", border:"1px solid #E2E8F0", borderRadius:8, padding:"7px 12px", cursor:"pointer" }
+        }, h(Icon.chevronRight, { style:{ transform:"rotate(180deg)" } }), "Project List"),
+        h("div", { style:{ fontSize:13, color:"#64748B" } },
+          h("span", { style:{ fontWeight:700, color:"#152238" } }, project || "\u2014"),
+          application ? ` \u00B7 ${application}` : ""
+        )
+      ),
+      h("div", { style:{ display:"flex", gap:8, flexWrap:"wrap" } },
+        WIZARD_STEPS.map(s => h("button", {
+          key:s.n, onClick:() => onStepChange(s.n),
+          style:{
+            padding:"7px 14px", borderRadius:999, fontSize:12, fontWeight:600, cursor:"pointer",
+            border: step === s.n ? "none" : "1px solid #E2E8F0",
+            background: step === s.n ? "#1E3A5F" : "#fff",
+            color: step === s.n ? "#fff" : "#334155"
+          }
+        }, `${s.n}. ${s.label}`))
+      )
+    ),
+
+    step === 1 && h(DetailView, timelineProps),
+    step === 2 && h(ProjectBaselineView, pmoProps),
+    step === 3 && h(ChangeManagementView, cmProps),
+
+    h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"0 28px 48px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" } },
+      h("button", {
+        onClick: () => onStepChange(Math.max(1, step - 1)),
+        disabled: step === 1,
+        className:"btn",
+        style: step === 1 ? { opacity:0.4, pointerEvents:"none" } : {}
+      }, "\u2190 Sebelumnya"),
+      h(WizardSaveButton, { onSave: null }),
+      step < 3
+        ? h("button", { className:"btn btn-primary", onClick: () => onStepChange(step + 1) }, "Selanjutnya \u2192")
+        : h("button", { className:"btn btn-primary", onClick:onExit }, "Selesai")
+    )
+  );
+}
 
 function Sidebar({ active, onNavigate }) {
   const activeGroup = NAV_ITEMS.find(it => it.children && it.children.some(c => c.key === active));
@@ -988,11 +1106,236 @@ function DocumentPlaceholderView({ title }) {
   );
 }
 
+/* =========================================================================
+   CHANGE MANAGEMENT
+   ========================================================================= */
+function ChangeManagementView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, notes, onUpdateNotes, onSave }) {
+  const hasIdentity = norm(applicationText) && norm(projectText);
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Change Management"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Catatan perubahan dan manajemen dampak per project.")
+    ),
+    h(ProjectSelector, { application: applicationText, project: projectText, onApplicationChange, onProjectChange, projectList }),
+    !hasIdentity && h("div", { style:{ marginTop:16, fontSize:13, color:"#94A3B8", textAlign:"center", padding:"28px 0" } },
+      "Pilih Application dan Project di atas (data diambil dari menu Project List) untuk mengelola Change Management."
+    ),
+    hasIdentity && h("div", { className:"card", style:{ marginTop:16 } },
+      h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155", marginBottom:14 } }, "Notes"),
+      h("textarea", {
+        value: notes || "", onChange: e => onUpdateNotes(e.target.value), placeholder:"Catatan change management\u2026",
+        style:{ width:"100%", minHeight:160, fontSize:13, border:"1px solid #E2E8F0", borderRadius:9, padding:"11px 13px", outline:"none", resize:"vertical", fontFamily:"inherit", lineHeight:1.5 }
+      }),
+      h(SaveButton, { onClick: onSave })
+    )
+  );
+}
+
+/* =========================================================================
+   MASTER DATA MANAGEMENT
+   ========================================================================= */
+const MASTER_DATA_CATEGORIES = [
+  { key:"phase", label:"Phase" },
+  { key:"mountain", label:"Mountain" },
+  { key:"stream", label:"Stream" },
+  { key:"subStream", label:"Sub Stream" },
+  { key:"applications", label:"Applications" },
+  { key:"deliveryModel", label:"Delivery Model" },
+];
+
+const DEFAULT_MASTER_DATA = {
+  phase: ["0 - Exploration","1 - Design","2 - R&I","3 - Development","4 - UAT","5 - Go Live Prep","6 - Hypercare","60 - Closing","61 - Cancelled","62 - Hold"],
+  mountain: [],
+  stream: [],
+  subStream: [],
+  applications: [],
+  deliveryModel: ["Product","Project","Program"],
+};
+
+function MasterListEditor({ items, onAdd, onUpdate, onRemove }) {
+  return h("div", null,
+    h("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 } },
+      (!items || items.length === 0)
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"8px 0" } }, "Belum ada data.")
+        : items.map((val, idx) => h("div", { key:idx, style:{ display:"flex", alignItems:"center", gap:8 } },
+            h("div", { style:{ width:24, fontSize:12, color:"#94A3B8", flexShrink:0, textAlign:"right" } }, idx + 1),
+            h("input", {
+              value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"Nilai\u2026",
+              style:{ flex:1, fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px", outline:"none" }
+            }),
+            h("button", { onClick:() => onRemove(idx), style:{ color:"#DC2626", background:"none", border:"none", display:"flex", fontSize:14, cursor:"pointer" } }, h(Icon.trash,{}))
+          ))
+    ),
+    h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), "Add")
+  );
+}
+
+function MasterDataSection({ category, expanded, onToggle, items, onAdd, onUpdate, onRemove }) {
+  return h("div", { className:"card", style:{ marginTop:16 } },
+    h("div", {
+      onClick: () => onToggle(category.key),
+      style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+    },
+      h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, category.label),
+      h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+    ),
+    expanded && h("div", { style:{ marginTop:14 } },
+      h(MasterListEditor, {
+        items,
+        onAdd: () => onAdd(category.key),
+        onUpdate: (idx, val) => onUpdate(category.key, idx, val),
+        onRemove: idx => onRemove(category.key, idx)
+      })
+    )
+  );
+}
+
+function MasterDataManagementView({ masterData, onAddItem, onUpdateItem, onRemoveItem }) {
+  const [expandedSections, setExpandedSections] = useState({});
+  const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Master Data Management"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar master data yang digunakan di seluruh aplikasi: Phase, Mountain, Stream & Sub-Stream, Applications, dan Delivery Model.")
+    ),
+    MASTER_DATA_CATEGORIES.map(cat => h(MasterDataSection, {
+      key: cat.key, category: cat, expanded: !!expandedSections[cat.key], onToggle: toggleSection,
+      items: (masterData && masterData[cat.key]) || [],
+      onAdd: onAddItem, onUpdate: onUpdateItem, onRemove: onRemoveItem
+    }))
+  );
+}
+
+/* =========================================================================
+   USER MANAGEMENT
+   ========================================================================= */
+const USER_ROLES = [
+  { key:"superAdmin", label:"Super Admin" },
+  { key:"tpo", label:"TPO" },
+  { key:"pmo", label:"PMO" },
+  { key:"bpo", label:"BPO" },
+  { key:"viewOnly", label:"View Only" },
+];
+const DEFAULT_USER_MANAGEMENT = Object.fromEntries(USER_ROLES.map(r => [r.key, []]));
+
+function EmailListEditor({ emails, onAdd, onUpdate, onRemove }) {
+  return h("div", null,
+    h("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 } },
+      (!emails || emails.length === 0)
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"8px 0" } }, "Belum ada email untuk role ini.")
+        : emails.map((val, idx) => h("div", { key:idx, style:{ display:"flex", alignItems:"center", gap:8 } },
+            h("div", { style:{ width:24, fontSize:12, color:"#94A3B8", flexShrink:0, textAlign:"right" } }, idx + 1),
+            h("input", {
+              type:"email", value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"nama@perusahaan.com",
+              style:{ flex:1, fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px", outline:"none" }
+            }),
+            h("button", { onClick:() => onRemove(idx), style:{ color:"#DC2626", background:"none", border:"none", display:"flex", fontSize:14, cursor:"pointer" } }, h(Icon.trash,{}))
+          ))
+    ),
+    h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), "Add")
+  );
+}
+
+function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, onRemove }) {
+  return h("div", { className:"card", style:{ marginTop:16 } },
+    h("div", {
+      onClick: () => onToggle(role.key),
+      style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+    },
+      h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+        h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, role.label),
+        h("div", { style:{ fontSize:11, fontWeight:600, color:"#4F9D9D", background:"#EAF6F5", borderRadius:999, padding:"2px 9px" } }, `${(emails || []).length}`)
+      ),
+      h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+    ),
+    expanded && h("div", { style:{ marginTop:14 } },
+      h(EmailListEditor, {
+        emails,
+        onAdd: () => onAdd(role.key),
+        onUpdate: (idx, val) => onUpdate(role.key, idx, val),
+        onRemove: idx => onRemove(role.key, idx)
+      })
+    )
+  );
+}
+
+function UserManagementView({ userManagement, onAddEmail, onUpdateEmail, onRemoveEmail }) {
+  const [expandedSections, setExpandedSections] = useState({});
+  const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "User Management"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar email pengguna untuk setiap role: Super Admin, TPO, PMO, BPO, dan View Only.")
+    ),
+    USER_ROLES.map(role => h(UserRoleSection, {
+      key: role.key, role, expanded: !!expandedSections[role.key], onToggle: toggleSection,
+      emails: (userManagement && userManagement[role.key]) || [],
+      onAdd: onAddEmail, onUpdate: onUpdateEmail, onRemove: onRemoveEmail
+    }))
+  );
+}
+
 const BASELINE_SECTIONS = [
+  { key:"readiness", label:"Launch Readiness Checklist" },
+  { key:"charter", label:"Project Charter" },
+  { key:"stakeholder", label:"Stakeholder Register" },
+  { key:"benefit", label:"Benefit Register" },
+  { key:"risk", label:"Risk & Dependency Log" },
+  { key:"upload", label:"Documents" },
+];
+
+const READINESS_ITEMS = [
   { key:"charter", label:"Project Charter" },
   { key:"benefit", label:"Benefit Register" },
-  { key:"upload", label:"Upload Document" },
+  { key:"prd", label:"PRD" },
+  { key:"stakeholder", label:"Stakeholder Register" },
+  { key:"risk", label:"Risk & Dependency Log", optional:true },
 ];
+
+function LaunchReadinessChecklist({ readiness, onToggleItem }) {
+  const items = READINESS_ITEMS;
+  const checkedCount = items.filter(i => readiness && readiness[i.key]).length;
+  const total = items.length;
+  const pct = total ? Math.round((checkedCount / total) * 100) : 0;
+  const isComplete = checkedCount === total;
+
+  return h("div", { style:{ marginTop:4 } },
+    h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, flexWrap:"wrap", gap:10 } },
+      h("div", { style:{ fontSize:12, color:"#64748B" } }, `${checkedCount} dari ${total} dokumen selesai`),
+      h("div", { style:{ fontSize:13, fontWeight:700, color: isComplete ? "#166534" : "#1E3A5F" } }, `${pct}%`)
+    ),
+    h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", marginBottom:18 } },
+      h("div", { style:{ height:"100%", width:`${pct}%`, background: isComplete ? "#22C55E" : "#4F9D9D", borderRadius:6, transition:"width .3s ease" } })
+    ),
+    h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(230px, 1fr))", gap:12 } },
+      items.map(item => {
+        const checked = !!(readiness && readiness[item.key]);
+        return h("div", {
+          key:item.key, onClick: () => onToggleItem(item.key),
+          style:{
+            display:"flex", alignItems:"center", gap:12, padding:"14px 16px", borderRadius:11, cursor:"pointer",
+            border: checked ? "1px solid #86EFAC" : "1px solid #E2E8F0",
+            background: checked ? "#F0FDF4" : "#fff"
+          }
+        },
+          h("div", {
+            style:{
+              width:22, height:22, borderRadius:6, flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center",
+              border: checked ? "none" : "2px solid #CBD5E1",
+              background: checked ? "#22C55E" : "transparent", fontSize:12
+            }
+          }, checked && h(Icon.check, { style:{ color:"#fff" } })),
+          h("div", { style:{ flex:1, minWidth:0 } },
+            h("div", { style:{ fontSize:13, fontWeight:600, color: checked ? "#166534" : "#334155" } }, item.label),
+            item.optional && h("div", { style:{ fontSize:11, color:"#94A3B8", marginTop:1 } }, "Optional")
+          )
+        );
+      })
+    )
+  );
+}
 
 const CHARTER_FIELDS = {
   background: { label:"Project Background", hint:"Business reasons (problem or opportunities)." },
@@ -1070,7 +1413,138 @@ function ProjectCharterForm({ charter, onUpdateField }) {
   );
 }
 
-function BaselineSection({ section, expanded, onToggle }) {
+function SaveButton({ onClick }) {
+  return h("div", { style:{ display:"flex", justifyContent:"flex-end", marginTop:16 } },
+    h("button", { className:"btn btn-primary", onClick }, "Save")
+  );
+}
+
+/* =========================================================================
+   CREATE PROJECT (form styled like the PMO document templates)
+   ========================================================================= */
+function CreateProjectField({ label, children }) {
+  return h("div", { style:{ padding:"14px 16px", display:"flex", flexDirection:"column", gap:6 } },
+    h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E293B", textDecoration:"underline", textUnderlineOffset:"2px" } }, label),
+    children
+  );
+}
+
+function MasterDataSelect({ value, options, onChange, style }) {
+  return h("select", { value: value || "", onChange:e => onChange(e.target.value), style },
+    h("option", { value:"" }, "\u2014 pilih \u2014"),
+    (options || []).map(o => h("option", { key:o, value:o }, o))
+  );
+}
+
+function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions }) {
+  const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 9px", outline:"none", background:"#fff" };
+  const phaseMeta = useMemo(() => {
+    const { bg, fg } = buildPhaseColorMaps(phaseOptions);
+    return { options: phaseOptions || [], bg, fg };
+  }, [phaseOptions]);
+  const cellBorder = "1px solid #C7DAEF";
+
+  return h("div", { style:{ border:cellBorder, borderRadius:10, overflow:"hidden", background:"#fff" } },
+    h("div", { style:{ padding:"14px 16px", borderBottom:cellBorder } },
+      h("div", { style:{ fontSize:18, fontWeight:800, color:"#1E3A5F" } }, "Form Create Project")
+    ),
+    h("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr" } },
+      h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Application" },
+          h(MasterDataSelect, { value: form.application, options: applicationOptions, onChange: v => onFieldChange("application", v), style:inputStyle }))),
+      h("div", { style:{ background:"#EAF1F8", borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Delivery Model" },
+          h(MasterDataSelect, { value: form.deliveryModel, options: deliveryModelOptions, onChange: v => onFieldChange("deliveryModel", v), style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Project" },
+          h("input", { value: form.project, onChange:e => onFieldChange("project", e.target.value), placeholder:"Nama project\u2026", style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Resource" },
+          h("input", { value: form.resource, onChange:e => onFieldChange("resource", e.target.value), placeholder:"Nama resource\u2026", style:inputStyle }))),
+      h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Mountain" },
+          h(MasterDataSelect, { value: form.mountain, options: mountainOptions, onChange: v => onFieldChange("mountain", v), style:inputStyle }))),
+      h("div", { style:{ background:"#EAF1F8", borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Stream" },
+          h(MasterDataSelect, { value: form.stream, options: streamOptions, onChange: v => onFieldChange("stream", v), style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Sub Stream" },
+          h(MasterDataSelect, { value: form.subStream, options: subStreamOptions, onChange: v => onFieldChange("subStream", v), style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Start Date" },
+          h("input", { type:"date", value: form.startDate, onChange:e => onFieldChange("startDate", e.target.value), style:inputStyle }))),
+      h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"End Date" },
+          h("input", { type:"date", value: form.endDate, onChange:e => onFieldChange("endDate", e.target.value), style:inputStyle }))),
+      h("div", { style:{ background:"#EAF1F8", borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"TPO" },
+          h("input", { value: form.tpo, onChange:e => onFieldChange("tpo", e.target.value), placeholder:"Nama TPO", style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Delivery Lead" },
+          h("input", { value: form.deliveryLead, onChange:e => onFieldChange("deliveryLead", e.target.value), placeholder:"Nama Delivery Lead", style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderBottom:cellBorder } },
+        h(CreateProjectField, { label:"Priority" },
+          h(RagSelect, { value: form.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onFieldChange("priority", v) }))),
+      h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder } },
+        h(CreateProjectField, { label:"Phase" },
+          h(RagSelect, { value: form.phase, options: phaseMeta.options, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg, onChange: v => onFieldChange("phase", v) }))),
+      h("div", { style:{ background:"#EAF1F8" } })
+    ),
+    h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", borderTop:cellBorder } },
+      h("button", { className:"btn btn-primary", onClick:onSubmit }, "Submit")
+    )
+  );
+}
+
+function CreateProjectView({ form, onFieldChange, onSubmit, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions }) {
+  return h("div", { style:{ maxWidth:900, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Create Project"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Isi formulir berikut untuk menambahkan project baru ke Project List.")
+    ),
+    h(CreateProjectForm, { form, onFieldChange, onSubmit, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions })
+  );
+}
+
+function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave }) {
+  const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
+  const docTypeListId = "doc-type-suggest";
+  return h("div", null,
+    h("datalist", { id:docTypeListId }, h("option", { value:"PRD" }), h("option", { value:"Mockup" })),
+    h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12, marginTop:8, marginBottom:16 } },
+      h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+        h("thead", null, h("tr", { style:{ background:"#152238" } },
+          h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600, width:56 } }, "No"),
+          h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Document Type"),
+          h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Insert Link"),
+          h("th", { style:{ width:40, background:"#152238" } })
+        )),
+        h("tbody", null,
+          (!rows || rows.length === 0)
+            ? h("tr", null, h("td", { colSpan:4, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Belum ada dokumen. Klik "Add" untuk menambah baris.'))
+            : rows.map((row, i) => h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
+                h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, i + 1),
+                h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
+                  h("input", { value: row.docType || "", onChange:e => onUpdate(row.id, "docType", e.target.value), list:docTypeListId, placeholder:"PRD, Mockup, atau lainnya\u2026", style:inputStyle })
+                ),
+                h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
+                  h("input", { value: row.link || "", onChange:e => onUpdate(row.id, "link", e.target.value), placeholder:"https://\u2026", style:inputStyle })
+                ),
+                h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", textAlign:"center" } },
+                  h("button", { onClick:() => onRemove(row.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex", margin:"0 auto" } }, h(Icon.trash,{}))
+                )
+              ))
+        )
+      )
+    ),
+    h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 } },
+      h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), "Add"),
+      h("button", { className:"btn btn-primary", onClick:onSave }, "Save")
+    )
+  );
+}
+
+function BaselineSection({ section, expanded, onToggle, onSave }) {
   return h("div", { className:"card", style:{ marginTop:16 } },
     h("div", {
       onClick: () => onToggle(section.key),
@@ -1079,21 +1553,28 @@ function BaselineSection({ section, expanded, onToggle }) {
       h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
       h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
     ),
-    expanded && h("div", { style:{ padding:"44px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } },
-      "Belum ada konten untuk bagian ini."
+    expanded && h("div", null,
+      h("div", { style:{ padding:"44px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } },
+        "Belum ada konten untuk bagian ini."
+      ),
+      onSave && h(SaveButton, { onClick: onSave })
     )
   );
 }
 
-function ProjectBaselineView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, charter, onUpdateCharterField }) {
-  const [expandedSections, setExpandedSections] = useState({ charter:true, benefit:true, upload:true });
+function ProjectBaselineView({
+  applicationText, projectText, onApplicationChange, onProjectChange, projectList,
+  charter, onUpdateCharterField, readiness, onToggleReadinessItem, onSaveSection,
+  documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow
+}) {
+  const [expandedSections, setExpandedSections] = useState({ readiness:false, charter:false, benefit:false, stakeholder:false, risk:false, upload:false });
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
   const hasIdentity = norm(applicationText) && norm(projectText);
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project Baseline"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Dokumen baseline per project: Project Charter, Benefit Register, dan Upload Document.")
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "PMO"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Dokumen baseline per project: Launch Readiness Checklist, Project Charter, Stakeholder Register, Benefit Register, Risk & Dependency Log, dan Documents.")
     ),
 
     h(ProjectSelector, { application: applicationText, project: projectText, onApplicationChange, onProjectChange, projectList }),
@@ -1104,6 +1585,18 @@ function ProjectBaselineView({ applicationText, projectText, onApplicationChange
 
     hasIdentity && BASELINE_SECTIONS.map(section => {
       const expanded = !!expandedSections[section.key];
+      if (section.key === "readiness") {
+        return h("div", { key:section.key, className:"card", style:{ marginTop:16 } },
+          h("div", {
+            onClick: () => toggleSection(section.key),
+            style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+          },
+            h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
+            h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+          ),
+          expanded && h(LaunchReadinessChecklist, { readiness, onToggleItem: onToggleReadinessItem })
+        );
+      }
       if (section.key === "charter") {
         return h("div", { key:section.key, className:"card", style:{ marginTop:16 } },
           h("div", {
@@ -1113,10 +1606,28 @@ function ProjectBaselineView({ applicationText, projectText, onApplicationChange
             h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
             h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
           ),
-          expanded && h(ProjectCharterForm, { charter, onUpdateField: onUpdateCharterField })
+          expanded && h("div", null,
+            h(ProjectCharterForm, { charter, onUpdateField: onUpdateCharterField }),
+            h(SaveButton, { onClick: () => onSaveSection("charter") })
+          )
         );
       }
-      return h(BaselineSection, { key:section.key, section, expanded, onToggle: toggleSection });
+      if (section.key === "upload") {
+        return h("div", { key:section.key, className:"card", style:{ marginTop:16 } },
+          h("div", {
+            onClick: () => toggleSection(section.key),
+            style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+          },
+            h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
+            h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+          ),
+          expanded && h(DocumentsSection, {
+            rows: documentRows, onAdd: onAddDocumentRow, onUpdate: onUpdateDocumentRow, onRemove: onRemoveDocumentRow,
+            onSave: () => onSaveSection("upload")
+          })
+        );
+      }
+      return h(BaselineSection, { key:section.key, section, expanded, onToggle: toggleSection, onSave: () => onSaveSection(section.key) });
     })
   );
 }
@@ -1127,6 +1638,13 @@ function AppRoot() {
   const [projectList, setProjectList] = useState(stored.projectList || []);
   const [records, setRecords] = useState(stored.records || {});
   const [baselineRecords, setBaselineRecords] = useState(stored.baselineRecords || {});
+  const [masterData, setMasterData] = useState({ ...DEFAULT_MASTER_DATA, ...(stored.masterData || {}) });
+  const [userManagement, setUserManagement] = useState(stored.userManagement || DEFAULT_USER_MANAGEMENT);
+  const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
+  const [cmApplicationText, setCmApplicationText] = useState(stored.lastCmApplication || "");
+  const [cmProjectText, setCmProjectText] = useState(stored.lastCmProject || "");
+  const [changeManagementRecords, setChangeManagementRecords] = useState(stored.changeManagementRecords || {});
+  const [wizardStep, setWizardStep] = useState(1);
   const [applicationText, setApplicationText] = useState(stored.lastApplication || "");
   const [projectText, setProjectText] = useState(stored.lastProject || "");
   const [baselineApplicationText, setBaselineApplicationText] = useState(stored.lastBaselineApplication || "");
@@ -1152,37 +1670,95 @@ function AppRoot() {
   };
 
   const baselineKey = useMemo(() => makeKey(baselineApplicationText, baselineProjectText), [baselineApplicationText, baselineProjectText]);
-  const baselineRecord = baselineRecords[baselineKey] || { charter:{}, benefit:{}, documents:[] };
+  const baselineRecord = baselineRecords[baselineKey] || { readiness:{}, charter:{}, benefit:{}, documentRows:[] };
   const updateBaselineRecord = updater => {
     setBaselineRecords(prev => {
-      const cur = prev[baselineKey] || { charter:{}, benefit:{}, documents:[] };
+      const cur = prev[baselineKey] || { readiness:{}, charter:{}, benefit:{}, documentRows:[] };
       const next = updater(cur);
       return { ...prev, [baselineKey]: { ...next, application: baselineApplicationText, project: baselineProjectText } };
     });
   };
   const onUpdateCharterField = (field, value) => updateBaselineRecord(cur => ({ ...cur, charter: { ...(cur.charter || {}), [field]: value } }));
+  const onToggleReadinessItem = itemKey => updateBaselineRecord(cur => {
+    const current = cur.readiness || {};
+    return { ...cur, readiness: { ...current, [itemKey]: !current[itemKey] } };
+  });
+  const setReadinessTrue = itemKey => updateBaselineRecord(cur => ({ ...cur, readiness: { ...(cur.readiness || {}), [itemKey]: true } }));
+  const BASELINE_SAVE_TO_READINESS = { charter:"charter", benefit:"benefit", stakeholder:"stakeholder", risk:"risk", upload:"prd" };
+  const onSaveBaselineSection = sectionKey => setReadinessTrue(BASELINE_SAVE_TO_READINESS[sectionKey] || sectionKey);
+  const onAddDocumentRow = () => updateBaselineRecord(cur => ({
+    ...cur, documentRows: [...(cur.documentRows || []), { id: uid(), docType:"", link:"" }]
+  }));
+  const onUpdateDocumentRow = (rowId, field, value) => updateBaselineRecord(cur => ({
+    ...cur, documentRows: (cur.documentRows || []).map(r => r.id === rowId ? { ...r, [field]: value } : r)
+  }));
+  const onRemoveDocumentRow = rowId => updateBaselineRecord(cur => ({
+    ...cur, documentRows: (cur.documentRows || []).filter(r => r.id !== rowId)
+  }));
+
+  const cmKey = useMemo(() => makeKey(cmApplicationText, cmProjectText), [cmApplicationText, cmProjectText]);
+  const changeManagementRecord = changeManagementRecords[cmKey] || { notes:"" };
+  const onUpdateCmNotes = value => setChangeManagementRecords(prev => ({
+    ...prev, [cmKey]: { ...(prev[cmKey] || {}), notes: value, application: cmApplicationText, project: cmProjectText }
+  }));
+
+  const onOpenProjectWizard = (application, project) => {
+    setApplicationText(application);
+    setProjectText(project);
+    setBaselineApplicationText(application);
+    setBaselineProjectText(project);
+    setCmApplicationText(application);
+    setCmProjectText(project);
+    setWizardStep(1);
+    setActiveView("project-wizard");
+  };
+  const onExitWizard = () => setActiveView("list");
+
+  const onAddMasterItem = catKey => setMasterData(prev => ({ ...prev, [catKey]: [...(prev[catKey] || []), ""] }));
+  const onUpdateMasterItem = (catKey, idx, value) => setMasterData(prev => ({
+    ...prev, [catKey]: (prev[catKey] || []).map((v, i) => i === idx ? value : v)
+  }));
+  const onRemoveMasterItem = (catKey, idx) => setMasterData(prev => ({
+    ...prev, [catKey]: (prev[catKey] || []).filter((_, i) => i !== idx)
+  }));
+
+  const onAddUserEmail = roleKey => setUserManagement(prev => ({ ...prev, [roleKey]: [...(prev[roleKey] || []), ""] }));
+  const onUpdateUserEmail = (roleKey, idx, value) => setUserManagement(prev => ({
+    ...prev, [roleKey]: (prev[roleKey] || []).map((v, i) => i === idx ? value : v)
+  }));
+  const onRemoveUserEmail = (roleKey, idx) => setUserManagement(prev => ({
+    ...prev, [roleKey]: (prev[roleKey] || []).filter((_, i) => i !== idx)
+  }));
 
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; return; }
     setSaveStatus("saving");
     const t = setTimeout(() => {
       const ok = saveState({
-        activeView, projectList, records, baselineRecords, lastApplication: applicationText, lastProject: projectText,
+        activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords,
+        lastApplication: applicationText, lastProject: projectText,
         lastBaselineApplication: baselineApplicationText, lastBaselineProject: baselineProjectText,
+        lastCmApplication: cmApplicationText, lastCmProject: cmProjectText,
         taskColumnOrder, taskHiddenColumns, todoHiddenColumns
       });
       setSaveStatus(ok ? "saved" : "error");
     }, 400);
     return () => clearTimeout(t);
-  }, [activeView, projectList, records, baselineRecords, applicationText, projectText, baselineApplicationText, baselineProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns]);
+  }, [activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, applicationText, projectText, baselineApplicationText, baselineProjectText, cmApplicationText, cmProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns]);
 
-  /* ---- Project List CRUD ---- */
-  const onAddProjectRow = () => setProjectList(list => [...list, {
-    id: uid(), application:"", project:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:""
-  }]);
-  const onUpdateProjectRow = (id, field, value) => setProjectList(list => list.map(r => r.id === id ? { ...r, [field]: value } : r));
+  /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
   const onImportProjectRows = rows => setProjectList(list => [...list, ...rows]);
+  const onCreateProjectFieldChange = (field, value) => setCreateProjectForm(f => ({ ...f, [field]: value }));
+  const onSubmitCreateProject = () => {
+    if (!norm(createProjectForm.application) || !norm(createProjectForm.project)) {
+      alert("Application dan Project wajib diisi.");
+      return;
+    }
+    setProjectList(list => [...list, { id: uid(), ...createProjectForm }]);
+    setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
+    setActiveView("list");
+  };
   const onPlSort = k => setPlSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
   const sortedProjectList = useMemo(() => {
     if (!plSortConfig.key) return projectList;
@@ -1275,31 +1851,65 @@ function AppRoot() {
     return [...set].sort();
   }, [records, projectList]);
 
+  const detailViewProps = {
+    applicationText, projectText, onApplicationChange: setApplicationText, onProjectChange: setProjectText, projectList,
+    record, onAddTask, onUpdateTask, onRemoveTask, onImportTasks,
+    visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
+    sortConfig, onSort, sortedTasks,
+    onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
+    onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics
+  };
+  const projectBaselineViewProps = {
+    applicationText: baselineApplicationText, projectText: baselineProjectText,
+    onApplicationChange: setBaselineApplicationText, onProjectChange: setBaselineProjectText,
+    projectList, charter: baselineRecord.charter, onUpdateCharterField,
+    readiness: baselineRecord.readiness, onToggleReadinessItem,
+    onSaveSection: onSaveBaselineSection,
+    documentRows: baselineRecord.documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow
+  };
+  const changeManagementViewProps = {
+    applicationText: cmApplicationText, projectText: cmProjectText,
+    onApplicationChange: setCmApplicationText, onProjectChange: setCmProjectText,
+    projectList, notes: changeManagementRecord.notes, onUpdateNotes: onUpdateCmNotes, onSave: () => {}
+  };
+
   return h("div", { style:{ display:"flex", minHeight:"100vh", background:"#F3F5F8" } },
     h(Sidebar, { active: activeView, onNavigate: setActiveView }),
     h("div", { style:{ flex:1, minWidth:0 } },
-      activeView === "list"
+      activeView === "create-project"
+        ? h(CreateProjectView, {
+            form: createProjectForm, onFieldChange: onCreateProjectFieldChange, onSubmit: onSubmitCreateProject,
+            phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream, subStreamOptions: masterData.subStream,
+            applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel
+          })
+        : activeView === "list"
         ? h(ProjectListView, {
-            projectList: sortedProjectList, onAdd: onAddProjectRow, onUpdate: onUpdateProjectRow, onRemove: onRemoveProjectRow,
-            sortConfig: plSortConfig, onSort: onPlSort, onImport: onImportProjectRows, onExport: onExportProjectList
+            projectList: sortedProjectList, onRemove: onRemoveProjectRow,
+            sortConfig: plSortConfig, onSort: onPlSort, onImport: onImportProjectRows, onExport: onExportProjectList,
+            phaseOptions: masterData.phase, onOpenWizard: onOpenProjectWizard
+          })
+        : activeView === "project-wizard"
+        ? h(ProjectWizardView, {
+            step: wizardStep, onStepChange: setWizardStep, onExit: onExitWizard,
+            application: applicationText, project: projectText,
+            timelineProps: detailViewProps, pmoProps: projectBaselineViewProps, cmProps: changeManagementViewProps
           })
         : activeView === "detail"
-        ? h(DetailView, {
-            applicationText, projectText, onApplicationChange: setApplicationText, onProjectChange: setProjectText, projectList,
-            record, onAddTask, onUpdateTask, onRemoveTask, onImportTasks,
-            visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
-            sortConfig, onSort, sortedTasks,
-            onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
-            onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics
+        ? h(DetailView, detailViewProps)
+        : activeView === "master-data"
+        ? h(MasterDataManagementView, {
+            masterData, onAddItem: onAddMasterItem, onUpdateItem: onUpdateMasterItem, onRemoveItem: onRemoveMasterItem
           })
-        : DOC_TITLES[activeView]
+        : activeView === "user-management"
+        ? h(UserManagementView, {
+            userManagement, onAddEmail: onAddUserEmail, onUpdateEmail: onUpdateUserEmail, onRemoveEmail: onRemoveUserEmail
+          })
+        : PLACEHOLDER_TITLES[activeView]
         ? (activeView === "doc-baseline"
-            ? h(ProjectBaselineView, {
-                applicationText: baselineApplicationText, projectText: baselineProjectText,
-                onApplicationChange: setBaselineApplicationText, onProjectChange: setBaselineProjectText,
-                projectList, charter: baselineRecord.charter, onUpdateCharterField
-              })
-            : h(DocumentPlaceholderView, { title: DOC_TITLES[activeView] }))
+            ? h(ProjectBaselineView, projectBaselineViewProps)
+            : activeView === "doc-stakeholder"
+            ? h(ChangeManagementView, changeManagementViewProps)
+            : h(DocumentPlaceholderView, { title: PLACEHOLDER_TITLES[activeView] }))
         : null
     )
   );
