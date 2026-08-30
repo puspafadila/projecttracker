@@ -203,7 +203,7 @@ function buildMonthTicks(epoch, totalWeeks) {
     if (w >= 0 && w < totalWeeks) {
       out.push({
         x: w * WEEK_W,
-        label: new Date(t).toLocaleDateString("id-ID", { month:"short", timeZone:"UTC" }) + (m === 0 ? ` ${y}` : ""),
+        label: new Date(t).toLocaleDateString("en-US", { month:"short", timeZone:"UTC" }) + (m === 0 ? ` ${y}` : ""),
         isYearStart: m === 0
       });
     }
@@ -278,7 +278,7 @@ function RagSelect({ value, options, bgMap, fgMap, onChange, strikeValues }) {
     style: { width:"100%", fontSize:12, fontWeight:600, border: value ? "1px solid transparent" : "1px solid #E2E8F0",
       borderRadius:7, padding:"6px 4px", background:bg, color:fg, outline:"none", textAlign:"center",
       textDecoration: strike ? "line-through" : "none" }
-  }, h("option",{value:""},"\u2014 pilih \u2014"), options.map(o => h("option",{key:o,value:o},o)));
+  }, h("option",{value:""},"\u2014 select \u2014"), options.map(o => h("option",{key:o,value:o},o)));
 }
 
 /* Excel-style column filter: a funnel button in the column header opens a
@@ -323,11 +323,11 @@ function FilterDropdown({ options, selected, onChange }) {
     onChange(next.size === options.length ? null : [...next]);
   };
 
-  return h("div", { style:{ position:"relative", display:"flex" }, onClick: e => e.stopPropagation() },
+  return h("div", { style:{ position:"relative", display:"flex", flexShrink:0 }, onClick: e => e.stopPropagation() },
     h("button", {
       ref: btnRef, onClick: openPanel, title:"Filter",
       style:{ background:"none", border:"none", padding:0, display:"flex", alignItems:"center", cursor:"pointer",
-        color: isActive ? "#5EEAD4" : "inherit" }
+        color: isActive ? "#5EEAD4" : "#B7C3D6" }
     }, h(Icon.filter,{})),
     open && h("div", {
       style:{ position:"fixed", top:pos.top, left:pos.left, zIndex:100, background:"#fff", color:"#1E293B",
@@ -340,12 +340,12 @@ function FilterDropdown({ options, selected, onChange }) {
           style:{ width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:6, padding:"5px 7px", outline:"none" } })
       ),
       h("div", { style:{ display:"flex", gap:12, padding:"6px 8px", borderBottom:"1px solid #F1F5F9" } },
-        h("button", { onClick:()=>onChange(null), style:{ fontSize:11, color:"#1E3A5F", background:"none", border:"none", fontWeight:600, padding:0, cursor:"pointer" } }, "Pilih Semua"),
-        h("button", { onClick:()=>onChange([]), style:{ fontSize:11, color:"#DC2626", background:"none", border:"none", fontWeight:600, padding:0, cursor:"pointer" } }, "Kosongkan")
+        h("button", { onClick:()=>onChange(null), style:{ fontSize:11, color:"#1E3A5F", background:"none", border:"none", fontWeight:600, padding:0, cursor:"pointer" } }, "Select All"),
+        h("button", { onClick:()=>onChange([]), style:{ fontSize:11, color:"#DC2626", background:"none", border:"none", fontWeight:600, padding:0, cursor:"pointer" } }, "Clear")
       ),
       h("div", { style:{ maxHeight:220, overflow:"auto", padding:6 } },
         filteredOptions.length === 0
-          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"8px 4px" } }, "Tidak ada opsi")
+          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"8px 4px" } }, "No options")
           : filteredOptions.map(o => h("label", { key:o, style:{ display:"flex", alignItems:"center", gap:7, padding:"5px 4px", fontSize:12, color:"#334155", cursor:"pointer" } },
               h("input", { type:"checkbox", checked: checkedSet.has(o), onChange:()=>toggleValue(o) }),
               h("span", { style:{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, o)
@@ -355,13 +355,13 @@ function FilterDropdown({ options, selected, onChange }) {
   );
 }
 
-/* Compute per-column unique display values (blank -> "(Kosong)") for the
+/* Compute per-column unique display values (blank -> "(Empty)") for the
    FilterDropdown options, and a predicate to apply a filters map to a row. */
 function buildColumnOptions(rows, colKeys) {
   const map = {};
   colKeys.forEach(key => {
     const vals = new Set();
-    rows.forEach(r => { const v = norm(r[key]); vals.add(v ? v : "(Kosong)"); });
+    rows.forEach(r => { const v = norm(r[key]); vals.add(v ? v : "(Empty)"); });
     map[key] = [...vals].sort((a,b) => a.localeCompare(b));
   });
   return map;
@@ -370,7 +370,7 @@ function rowPassesFilters(row, filters, colKeys) {
   return colKeys.every(key => {
     const sel = filters[key];
     if (!sel) return true;
-    const val = norm(row[key]) || "(Kosong)";
+    const val = norm(row[key]) || "(Empty)";
     return sel.includes(val);
   });
 }
@@ -385,7 +385,7 @@ function canModifyRecord(record, currentUser) {
 }
 function OwnerLockNote({ record }) {
   const owner = record && record.createdBy;
-  return h("span", { title: owner ? `Dibuat oleh ${owner} \u2014 hanya pembuat atau Super Admin yang bisa mengedit/menghapus` : "Hanya Super Admin yang bisa mengedit/menghapus data ini", style:{ color:"#CBD5E1", display:"flex" } }, h(Icon.lock,{}));
+  return h("span", { title: owner ? `Created by ${owner} \u2014 only the creator or Super Admin can edit/delete` : "Only Super Admin can edit/delete this data", style:{ color:"#CBD5E1", display:"flex" } }, h(Icon.lock,{}));
 }
 
 /* =========================================================================
@@ -424,7 +424,7 @@ function plCellDisplay(colKey, row, phaseMeta, onOpenWizard) {
     case "deliveryModel": return h("span", { style:textStyle }, row.deliveryModel || "\u2014");
     case "project": return row.project
       ? h("button", {
-          onClick: () => onOpenWizard(row.application, row.project), title:"Buka Timeline, PMO, dan Change Management",
+          onClick: () => onOpenWizard(row.application, row.project), title:"Open Timeline, PMO, and Change Management",
           style:{ ...textStyle, background:"none", border:"none", padding:0, margin:0, fontFamily:"inherit", color:"#1E3A5F", fontWeight:600, textDecoration:"underline", cursor:"pointer", textAlign:"left" }
         }, row.project)
       : h("span", { style:textStyle }, "\u2014");
@@ -445,7 +445,7 @@ function PlHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, 
     style: { width: col.width, padding:"10px 8px", display:"flex", alignItems:"center", gap:5, userSelect:"none", fontSize:12 }
   },
     h("span", {
-      onClick: () => onSort(col.key), title:"Klik untuk urutkan",
+      onClick: () => onSort(col.key), title:"Click to sort",
       style:{ color:"#fff", fontWeight:600, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }
     }, col.label),
     h("span", { onClick: () => onSort(col.key), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
@@ -484,8 +484,8 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
   return h("div", null,
     activeFilterCount > 0 && h("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:8, fontSize:12, color:"#64748B" } },
       h(Icon.filter,{ style:{ color:"#4F9D9D" } }),
-      `${activeFilterCount} filter aktif \u00B7 menampilkan ${filteredRows.length} dari ${rows.length} project`,
-      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Hapus semua filter")
+      `${activeFilterCount} active filter(s) \u00B7 showing ${filteredRows.length} of ${rows.length} projects`,
+      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Clear all filters")
     ),
     h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
       h("div", { style:{ minWidth: showGantt ? fixedW + timelineW : fixedW } },
@@ -503,12 +503,12 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
           showGantt && h("div", { style:{ position:"absolute", top:0, left:fixedW, bottom:0, width:timelineW, pointerEvents:"none" } },
             weekCells.map(w => h("div", { key:`bg${w.index}`, style:{ position:"absolute", left:w.x, top:0, bottom:0, width:WEEK_W, background: ganttYearRowColor(w.year) } })),
             weekCells.map(w => h("div", { key:`wk${w.index}`, style:{ position:"absolute", left:w.x, top:0, bottom:0, borderLeft: w.isYearStart ? "2px solid #64748B" : "1px solid #F1F5F9" } })),
-            todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Hari ini"})
+            todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Today"})
           ),
           rows.length === 0
-            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, 'Belum ada project. Tambahkan lewat menu "Create Project".')
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, 'No projects yet. Add one via the "Create Project" menu.')
             : filteredRows.length === 0
-            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "Tidak ada project yang cocok dengan filter.")
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "No projects match the filter.")
             : filteredRows.map((row, i) => {
               const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
               return h("div", { key:row.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
@@ -519,7 +519,7 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
                   )),
                   h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
                     canModifyRecord(row, currentUser)
-                      ? h("button", { onClick:()=>onRemove(row.id), title:"Hapus project", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                      ? h("button", { onClick:()=>onRemove(row.id), title:"Delete project", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
                       : h(OwnerLockNote, { record: row })
                   )
                 ),
@@ -576,7 +576,7 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
         }).filter(r => r.application || r.project);
 
         if (imported.length === 0) {
-          alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Application atau Project terisi.");
+          alert("No valid rows to import. Make sure the Application or Project column is filled in.");
           return;
         }
 
@@ -596,22 +596,22 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
           MASTER_CHECKS.forEach(chk => {
             const val = row[chk.key];
             if (val && !matches(val, chk.options)) {
-              errors.push(`Baris ${i + 1}: ${chk.label} "${val}" tidak ada di Master Data Management`);
+              errors.push(`Row ${i + 1}: ${chk.label} "${val}" not found in Master Data Management`);
             }
           });
         });
 
         if (errors.length > 0) {
           const shown = errors.slice(0, 10).join("\n");
-          const more = errors.length > 10 ? `\n\u2026dan ${errors.length - 10} masalah lainnya.` : "";
-          alert(`Import dibatalkan. Ditemukan ${errors.length} nilai yang tidak sesuai dengan Master Data Management:\n\n${shown}${more}\n\nPerbaiki data di file, atau tambahkan nilai tersebut ke Master Data Management terlebih dahulu.`);
+          const more = errors.length > 10 ? `\n\u2026and ${errors.length - 10} more issue(s).` : "";
+          alert(`Import cancelled. Found ${errors.length} value(s) that dont match Master Data Management:\n\n${shown}${more}\n\nFix the data in the file, or add these values to Master Data Management first.`);
           return;
         }
 
         onImport(imported);
-        alert(`${imported.length} project berhasil diimpor.`);
+        alert(`${imported.length} project(s) imported successfully.`);
       } catch (err) {
-        alert("Gagal membaca file. Pastikan formatnya sesuai template (.xlsx).");
+        alert("Failed to read the file. Make sure the format matches the template (.xlsx).");
       }
     };
     reader.readAsArrayBuffer(file);
@@ -622,7 +622,7 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project List"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Daftar master seluruh project beserta jadwal mingguannya. Klik nama Project untuk mengisi Timeline, PMO, dan Change Management.")
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Master list of all projects and their weekly schedule. Click a Project name to fill in Timeline, PMO, and Change Management.")
       ),
       h("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
         h("button", { className:"btn", onClick:triggerImport }, h(Icon.upload,{}), "Import"),
@@ -698,7 +698,7 @@ function SortableHeaderCell({ col, sortConfig, onSort, filterOptions, filterSele
     style: { width: col.width, padding:"10px 8px", display:"flex", alignItems:"center", gap:5, userSelect:"none", fontSize:12 }
   },
     h("span", {
-      onClick: () => onSort(col.key), title:"Klik untuk urutkan",
+      onClick: () => onSort(col.key), title:"Click to sort",
       style:{ color:"#fff", fontWeight:600, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }
     }, col.label),
     h("span", { onClick: () => onSort(col.key), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
@@ -723,9 +723,9 @@ function ColumnManager({ columnOrder, hiddenColumns, onToggleVisibility, onReord
   const cols = columnOrder.map(k => lookup[k]).filter(Boolean);
   return h("div", { style:{ position:"relative" }, onClick: e => e.stopPropagation() },
     h("button", { className:"btn", onClick: () => setOpen(o=>!o) },
-      h(Icon.columns,{}), "Kelola Kolom"),
+      h(Icon.columns,{}), "Manage Columns"),
     open && h("div", { style:{ position:"absolute", top:"110%", right:0, background:"#fff", border:"1px solid #E2E8F0", borderRadius:10, boxShadow:"0 10px 25px rgba(0,0,0,0.12)", width:250, maxHeight:380, overflow:"auto", zIndex:40, padding:10 } },
-      h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:6, padding:"0 2px" } }, "Seret untuk urutkan, centang untuk tampilkan/sembunyikan"),
+      h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:6, padding:"0 2px" } }, "Drag to reorder, check to show/hide"),
       cols.map(c => h("div", {
         key:c.key, draggable:true,
         onDragStart:()=>{ dragKey.current = c.key; },
@@ -766,8 +766,8 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onS
   return h("div", null,
     activeFilterCount > 0 && h("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:8, fontSize:12, color:"#64748B" } },
       h(Icon.filter,{ style:{ color:"#4F9D9D" } }),
-      `${activeFilterCount} filter aktif \u00B7 menampilkan ${filteredTasks.length} dari ${tasks.length} task`,
-      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Hapus semua filter")
+      `${activeFilterCount} active filter(s) \u00B7 showing ${filteredTasks.length} of ${tasks.length} tasks`,
+      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Clear all filters")
     ),
     h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
       h("div", { style:{ minWidth: showGantt ? fixedW + timelineW : fixedW } },
@@ -785,10 +785,10 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onS
           showGantt && h("div", { style:{ position:"absolute", top:0, left:fixedW, bottom:0, width:timelineW, pointerEvents:"none" } },
             weekCells.map(w => h("div", { key:`bg${w.index}`, style:{ position:"absolute", left:w.x, top:0, bottom:0, width:WEEK_W, background: ganttYearRowColor(w.year) } })),
             weekCells.map(w => h("div", { key:`wk${w.index}`, style:{ position:"absolute", left:w.x, top:0, bottom:0, borderLeft: w.isYearStart ? "2px solid #64748B" : "1px solid #F1F5F9" } })),
-            todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Hari ini"})
+            todayIdx !== null && h("div",{style:{position:"absolute", left:todayIdx*WEEK_W, top:0, bottom:0, borderLeft:"2px solid #EF4444", zIndex:2}, title:"Today"})
           ),
           filteredTasks.length === 0
-            ? h("div", { style:{ padding:"36px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "Tidak ada task yang cocok dengan filter.")
+            ? h("div", { style:{ padding:"36px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "No tasks match the filter.")
             : filteredTasks.map((task, i) => {
               const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
               const editable = canModifyRecord(task, currentUser);
@@ -839,9 +839,9 @@ function TodoColumnManager({ hiddenColumns, onToggleVisibility }) {
   }, [open]);
   return h("div", { style:{ position:"relative" }, onClick: e => e.stopPropagation() },
     h("button", { className:"btn", onClick: () => setOpen(o=>!o) },
-      h(Icon.columns,{}), "Kelola Tampilan"),
+      h(Icon.columns,{}), "Manage Display"),
     open && h("div", { style:{ position:"absolute", top:"110%", right:0, background:"#fff", border:"1px solid #E2E8F0", borderRadius:10, boxShadow:"0 10px 25px rgba(0,0,0,0.12)", width:210, zIndex:40, padding:10 } },
-      h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:6, padding:"0 2px" } }, "Tampilkan/sembunyikan kolom"),
+      h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:6, padding:"0 2px" } }, "Show/hide columns"),
       TODO_COLS.filter(c => TODO_TOGGLEABLE.includes(c.key)).map(c => h("label", {
         key:c.key, style:{ display:"flex", alignItems:"center", gap:7, padding:"7px 4px", borderRadius:6, cursor:"pointer" }
       },
@@ -858,7 +858,7 @@ function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected
     style: { padding:"10px 10px", textAlign:"left", color:"#fff", fontWeight:600, fontSize:12 }
   },
     h("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
-      h("span", { onClick: () => onSort(col.key), title:"Klik untuk urutkan", style:{ cursor:"pointer", flex:1 } }, col.label),
+      h("span", { onClick: () => onSort(col.key), title:"Click to sort", style:{ cursor:"pointer", flex:1 } }, col.label),
       h("span", { onClick: () => onSort(col.key), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
         active
           ? (sortConfig.dir === "asc" ? h(Icon.up,{style:{color:"#fff"}}) : h(Icon.down,{style:{color:"#fff"}}))
@@ -898,8 +898,8 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
   return h("div", null,
     activeFilterCount > 0 && h("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:8, fontSize:12, color:"#64748B" } },
       h(Icon.filter,{ style:{ color:"#4F9D9D" } }),
-      `${activeFilterCount} filter aktif \u00B7 menampilkan ${sorted.length} dari ${todos.length} Task`,
-      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Hapus semua filter")
+      `${activeFilterCount} active filter(s) \u00B7 showing ${sorted.length} of ${todos.length} Tasks`,
+      h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Clear all filters")
     ),
     h("div", { style:{ border:"1px solid #E2E8F0", borderRadius:12, overflow:"auto" } },
       h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
@@ -913,9 +913,9 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
         ),
         h("tbody", null,
           todos.length === 0
-            ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Belum ada Task. Klik "Tambah Task".'))
+            ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks yet. Click "Add Task".'))
           : sorted.length === 0
-            ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Tidak ada Task yang cocok dengan filter.'))
+            ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks match the filter.'))
           : sorted.map((t, i) => h("tr", { key:t.id, style:{ background: i%2===0 ? "#fff" : "#FAFBFC" } },
               visibleCols.map(c => h("td", { key:c.key, style:tdStyle },
                 !canModifyRecord(t, currentUser) ? h("span", { style:{ fontSize:13, color:"#334155" } },
@@ -948,23 +948,23 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
 function UpdateLog({ entries, onSubmit, onDelete }) {
   const [text, setText] = useState("");
   const submit = () => { const v = text.trim(); if (!v) return; onSubmit(v); setText(""); };
-  const fmt = d => new Date(d).toLocaleString("id-ID", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  const fmt = d => new Date(d).toLocaleString("en-US", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
   const sorted = [...(entries||[])].sort((a,b) => new Date(b.date) - new Date(a.date));
   return h("div", null,
     h("div", { style:{ display:"flex", gap:10, marginBottom:16, alignItems:"flex-end" } },
-      h("textarea", { value:text, onChange:e=>setText(e.target.value), placeholder:"Tulis update project\u2026", rows:2,
+      h("textarea", { value:text, onChange:e=>setText(e.target.value), placeholder:"Write a project update\u2026", rows:2,
         style:{ flex:1, fontSize:13, border:"1px solid #E2E8F0", borderRadius:9, padding:"9px 11px", outline:"none", resize:"vertical" } }),
       h("button", { className:"btn btn-primary", onClick:submit, style:{ padding:"10px 18px", flexShrink:0 } }, "Submit")
     ),
     sorted.length === 0
-      ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"18px 0", textAlign:"center" } }, "Belum ada update yang di-submit untuk project ini.")
+      ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"18px 0", textAlign:"center" } }, "No updates submitted for this project yet.")
       : h("div", { style:{ display:"flex", flexDirection:"column", gap:11, maxHeight:320, overflow:"auto" } },
           sorted.map(entry => h("div", { key:entry.id, style:{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, borderLeft:"3px solid #4F9D9D", paddingLeft:11 } },
             h("div", { style:{ flex:1 } },
               h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:2 } }, fmt(entry.date)),
               h("div", { style:{ fontSize:13, color:"#334155", whiteSpace:"pre-wrap" } }, entry.text)
             ),
-            h("button", { onClick:()=>onDelete(entry.id), title:"Hapus update", style:{ color:"#DC2626", flexShrink:0, padding:2, background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+            h("button", { onClick:()=>onDelete(entry.id), title:"Delete update", style:{ color:"#DC2626", flexShrink:0, padding:2, background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
           ))
         )
   );
@@ -987,18 +987,18 @@ function ProjectSelector({ application, project, onApplicationChange, onProjectC
       h("div", { style:{ flex:"1 1 240px", minWidth:220 } },
         h("label", { style:{ fontSize:13, color:"#64748B", display:"block", marginBottom:7, fontWeight:500 } }, "Application"),
         applications.length === 0
-          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"9px 10px", border:"1px dashed #E2E8F0", borderRadius:8 } }, "Belum ada Application di Project List")
+          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"9px 10px", border:"1px dashed #E2E8F0", borderRadius:8 } }, "No Applications in Project List yet")
           : h("select", { value: application, onChange: e => { onApplicationChange(e.target.value); onProjectChange(""); }, style: selectStyle },
-              h("option", { value:"" }, "\u2014 pilih Application \u2014"),
+              h("option", { value:"" }, "\u2014 select Application \u2014"),
               applications.map(a => h("option", { key:a, value:a }, a))
             )
       ),
       h("div", { style:{ flex:"1 1 260px", minWidth:220 } },
         h("label", { style:{ fontSize:13, color:"#64748B", display:"block", marginBottom:7, fontWeight:500 } }, "Project"),
         projectsForApp.length === 0
-          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"9px 10px", border:"1px dashed #E2E8F0", borderRadius:8 } }, "Belum ada Project untuk pilihan ini")
+          ? h("div", { style:{ fontSize:12, color:"#94A3B8", padding:"9px 10px", border:"1px dashed #E2E8F0", borderRadius:8 } }, "No Projects for this selection yet")
           : h("select", { value: project, onChange: e => onProjectChange(e.target.value), style: selectStyle },
-              h("option", { value:"" }, "\u2014 pilih Project \u2014"),
+              h("option", { value:"" }, "\u2014 select Project \u2014"),
               projectsForApp.map(p => h("option", { key:p, value:p }, p))
             )
       )
@@ -1008,15 +1008,81 @@ function ProjectSelector({ application, project, onApplicationChange, onProjectC
 
 function DetailView({
   applicationText, projectText, onApplicationChange, onProjectChange, projectList,
-  record, onAddTask, onUpdateTask, onRemoveTask, onImportTasks,
+  record, onCommitRecord,
   visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
-  sortConfig, onSort, sortedTasks,
-  onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
+  sortConfig, onSort,
+  todoHiddenColumns, onToggleTodoColumn,
   onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics, hideSelector, readOnly, ganttHidden, onToggleGantt, currentUser,
-  onSaveProjectFields, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions
+  onSaveProjectFields, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions,
+  onDraftStateChange
 }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
+  const useDraft = !!hideSelector;
+
+  const hasIdentity = norm(applicationText) && norm(projectText);
+  const projectRow = useMemo(() => {
+    if (!hasIdentity) return null;
+    return (projectList || []).find(r =>
+      norm(r.application).toLowerCase() === norm(applicationText).toLowerCase() &&
+      norm(r.project).toLowerCase() === norm(projectText).toLowerCase()
+    ) || null;
+  }, [projectList, applicationText, projectText, hasIdentity]);
+
+  // Draft copies — edited freely, never touch global state until the
+  // wizard's single Save button (in ProjectWizardView) commits them.
+  const [draftTasks, setDraftTasks] = useState(() => record.tasks || []);
+  const [draftTodos, setDraftTodos] = useState(() => record.todos || []);
+  const [draftProjectFields, setDraftProjectFields] = useState(() => extractProjectFields(projectRow));
+  const [dirty, setDirty] = useState(false);
+  const markDirty = () => setDirty(true);
+
+  const draftAddTask = () => {
+    setDraftTasks(list => {
+      const maxNo = Math.max(0, ...list.map(t => parseInt(t.no) || 0));
+      return [...list, { id: uid(), no:String(maxNo+1), task:"", startDate:"", endDate:"", pic:"", status:"", priority:"", phase:"", notes:"", createdBy: currentUser ? currentUser.email : "" }];
+    });
+    markDirty();
+  };
+  const draftUpdateTask = (taskId, field, value) => { setDraftTasks(list => list.map(t => t.id===taskId ? { ...t, [field]:value } : t)); markDirty(); };
+  const draftRemoveTask = taskId => { setDraftTasks(list => list.filter(t => t.id!==taskId)); markDirty(); };
+  const draftImportTasks = newTasks => { setDraftTasks(list => [...list, ...newTasks.map(t => ({ ...t, createdBy: currentUser ? currentUser.email : "" }))]); markDirty(); };
+
+  const draftAddTodo = () => { setDraftTodos(list => [...list, { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"", createdBy: currentUser ? currentUser.email : "" }]); markDirty(); };
+  const draftUpdateTodo = (todoId, field, value) => { setDraftTodos(list => list.map(t => t.id===todoId ? { ...t, [field]:value } : t)); markDirty(); };
+  const draftRemoveTodo = todoId => { setDraftTodos(list => list.filter(t => t.id!==todoId)); markDirty(); };
+
+  const draftUpdateProjectField = (field, value) => { setDraftProjectFields(f => ({ ...f, [field]:value })); markDirty(); };
+
+  const effectiveTasks = useDraft ? draftTasks : (record.tasks || []);
+  const effectiveTodos = useDraft ? draftTodos : (record.todos || []);
+  const effAddTask = useDraft ? draftAddTask : () => {};
+  const effUpdateTask = useDraft ? draftUpdateTask : () => {};
+  const effRemoveTask = useDraft ? draftRemoveTask : () => {};
+  const effImportTasks = useDraft ? draftImportTasks : () => {};
+  const effAddTodo = useDraft ? draftAddTodo : () => {};
+  const effUpdateTodo = useDraft ? draftUpdateTodo : () => {};
+  const effRemoveTodo = useDraft ? draftRemoveTodo : () => {};
+
+  const commit = () => {
+    onCommitRecord(draftTasks, draftTodos);
+    if (projectRow) onSaveProjectFields(projectRow.id, draftProjectFields);
+    setDirty(false);
+  };
+  useEffect(() => {
+    if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
+  }, [dirty, draftTasks, draftTodos, draftProjectFields]);
+
+  const sortedTasks = useMemo(() => {
+    if (!sortConfig.key) return effectiveTasks;
+    const sk = sortConfig.key;
+    return [...effectiveTasks].sort((a, b) => {
+      const av = String(a[sk] || "").toLowerCase(), bv = String(b[sk] || "").toLowerCase();
+      if (av < bv) return sortConfig.dir === "asc" ? -1 : 1;
+      if (av > bv) return sortConfig.dir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [effectiveTasks, sortConfig]);
 
   const handleImportFile = e => {
     const file = e.target.files[0];
@@ -1057,10 +1123,10 @@ function DetailView({
           phase: String(pick(row,"Phase") || ""),
           notes: String(pick(row,"Notes") || "")
         })).filter(t => t.task);
-        if (imported.length === 0) alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Task terisi.");
-        else { onImportTasks(imported); alert(`${imported.length} task berhasil diimpor.`); }
+        if (imported.length === 0) alert("No valid rows to import. Make sure the Task column is filled in.");
+        else { effImportTasks(imported); alert(`${imported.length} task(s) imported \u2014 click Save at the bottom of the page to keep them.`); }
       } catch (err) {
-        alert("Gagal membaca file. Pastikan formatnya sesuai template (.xlsx).");
+        alert("Failed to read the file. Make sure the format matches the template (.xlsx).");
       }
     };
     reader.readAsArrayBuffer(file);
@@ -1086,26 +1152,19 @@ function DetailView({
     XLSX.writeFile(wb, `Project_Timeline_${safe(applicationText)}_${safe(projectText)}_${date}.xlsx`);
   };
 
-  const hasIdentity = norm(applicationText) && norm(projectText);
-  const projectRow = useMemo(() => {
-    if (!hasIdentity) return null;
-    return (projectList || []).find(r =>
-      norm(r.application).toLowerCase() === norm(applicationText).toLowerCase() &&
-      norm(r.project).toLowerCase() === norm(projectText).toLowerCase()
-    ) || null;
-  }, [projectList, applicationText, projectText, hasIdentity]);
-
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Timeline"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola detail task, to-do, dan update mingguan per project.")
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Manage task details, to-dos, and weekly updates per project.")
       ),
-      h("div", { style:{ fontSize:12, color:"#94A3B8" } },
-        saveStatus === "saving" ? "Menyimpan\u2026" :
-        saveStatus === "saved" ? "\u2713 Tersimpan di perangkat ini" :
-        saveStatus === "error" ? "Gagal menyimpan" : "\u00A0"
-      )
+      useDraft
+        ? (dirty && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes"))
+        : h("div", { style:{ fontSize:12, color:"#94A3B8" } },
+            saveStatus === "saving" ? "Saving\u2026" :
+            saveStatus === "saved" ? "\u2713 Saved on this device" :
+            saveStatus === "error" ? "Save failed" : "\u00A0"
+          )
     ),
 
     !hideSelector && h(ProjectSelector, {
@@ -1114,7 +1173,7 @@ function DetailView({
     }),
 
     !hideSelector && !hasIdentity && h("div", { style:{ marginTop:16, fontSize:13, color:"#94A3B8", textAlign:"center", padding:"28px 0" } },
-      "Pilih Application dan Project di atas (data diambil dari menu Project List) untuk mulai mengelola detail task, to-do, dan update."
+      "Select Application and Project above (data comes from the Project List menu) to start managing task details, to-dos, and updates."
     ),
 
     hasIdentity && readOnly && h(ReadOnlyBanner),
@@ -1131,14 +1190,14 @@ function DetailView({
             h(Icon.download,{}), "Export Project Timeline"),
           h(ColumnManager, { columnOrder:taskColumnOrder, hiddenColumns:taskHiddenColumns, onToggleVisibility:onToggleColumnVisibility, onReorder:onReorderColumn,
             extraToggle: { label:"Gantt Chart", checked: !ganttHidden, onToggle: onToggleGantt } }),
-          h("button", { className:"btn btn-primary", onClick:onAddTask },
-            h(Icon.plus,{}), "Tambah Task")
+          h("button", { className:"btn btn-primary", onClick:effAddTask },
+            h(Icon.plus,{}), "Add Task")
         )
       ),
       h("datalist", { id:picListId }, pics.map(p => h("option", { key:p, value:p }))),
       sortedTasks.length === 0
-        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } }, 'Belum ada task. Klik "Tambah Task" atau import dari file Excel.')
-        : h(TaskTable, { tasks: sortedTasks, onUpdateTask, onRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser })
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } }, 'No tasks yet. Click "Add Task" or import from an Excel file.')
+        : h(TaskTable, { tasks: sortedTasks, onUpdateTask: effUpdateTask, onRemoveTask: effRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
@@ -1147,11 +1206,11 @@ function DetailView({
           h(Icon.checklist,{style:{color:"#4F9D9D"}}), "Tasks"),
         h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
           h(TodoColumnManager, { hiddenColumns: todoHiddenColumns, onToggleVisibility: onToggleTodoColumn }),
-          h("button", { className:"btn btn-primary", onClick:onAddTodo },
-            h(Icon.plus,{}), "Tambah Task")
+          h("button", { className:"btn btn-primary", onClick:effAddTodo },
+            h(Icon.plus,{}), "Add Task")
         )
       ),
-      h(TodoTable, { todos: record.todos || [], onUpdate: onUpdateTodo, onRemove: onRemoveTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser })
+      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onRemove: effRemoveTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
@@ -1160,7 +1219,9 @@ function DetailView({
     ),
 
     projectRow && h(ProjectDetailsCard, {
-      projectRow, onSave: fields => onSaveProjectFields(projectRow.id, fields), currentUser,
+      projectRow, form: useDraft ? draftProjectFields : extractProjectFields(projectRow),
+      onFieldChange: useDraft ? draftUpdateProjectField : () => {},
+      editable: useDraft && canModifyRecord(projectRow, currentUser), currentUser,
       phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions
     })
     )
@@ -1189,7 +1250,27 @@ const STANDALONE_PLACEHOLDER_TITLES = Object.fromEntries(
 );
 const PLACEHOLDER_TITLES = { ...DOC_TITLES, ...STANDALONE_PLACEHOLDER_TITLES };
 
-function WizardSaveButton({ onSave }) {
+function UnsavedChangesModal({ open, onSave, onDiscard, onCancel }) {
+  if (!open) return null;
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onCancel
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, padding:24, maxWidth:380, width:"100%", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238", marginBottom:8 } }, "Unsaved changes"),
+      h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } }, "You have unsaved changes, continue?"),
+      h("div", { style:{ display:"flex", gap:10, justifyContent:"flex-end", flexWrap:"wrap" } },
+        h("button", { className:"btn", onClick:onDiscard }, "Continue without save"),
+        h("button", { className:"btn btn-primary", onClick:onSave }, "Save Changes")
+      )
+    )
+  );
+}
+
+function WizardSaveButton({ onSave, dirty }) {
   const [flash, setFlash] = useState(false);
   const handleClick = () => {
     if (onSave) onSave();
@@ -1197,7 +1278,8 @@ function WizardSaveButton({ onSave }) {
     setTimeout(() => setFlash(false), 1600);
   };
   return h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
-    flash && h("span", { style:{ fontSize:12, color:"#166534", fontWeight:600 } }, "\u2713 Tersimpan"),
+    flash && h("span", { style:{ fontSize:12, color:"#166534", fontWeight:600 } }, "\u2713 Saved"),
+    dirty && !flash && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "Unsaved changes"),
     h("button", { className:"btn btn-primary", onClick:handleClick }, "Save")
   );
 }
@@ -1208,7 +1290,7 @@ const WIZARD_STEPS = [
   { n:3, label:"Change Management" },
 ];
 
-function ProjectWizardView({ step, onStepChange, onExit, application, project, timelineProps, pmoProps, cmProps }) {
+function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChange, onSave, application, project, timelineProps, pmoProps, cmProps }) {
   return h("div", null,
     h("div", {
       style:{ position:"sticky", top:0, zIndex:20, background:"#fff", borderBottom:"1px solid #E2E8F0",
@@ -1237,9 +1319,9 @@ function ProjectWizardView({ step, onStepChange, onExit, application, project, t
       )
     ),
 
-    step === 1 && h(DetailView, timelineProps),
-    step === 2 && h(ProjectBaselineView, pmoProps),
-    step === 3 && h(ChangeManagementView, cmProps),
+    step === 1 && h(DetailView, { ...timelineProps, onDraftStateChange }),
+    step === 2 && h(ProjectBaselineView, { ...pmoProps, onDraftStateChange }),
+    step === 3 && h(ChangeManagementView, { ...cmProps, onDraftStateChange }),
 
     h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"0 28px 48px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" } },
       h("button", {
@@ -1247,11 +1329,11 @@ function ProjectWizardView({ step, onStepChange, onExit, application, project, t
         disabled: step === 1,
         className:"btn",
         style: step === 1 ? { opacity:0.4, pointerEvents:"none" } : {}
-      }, "\u2190 Sebelumnya"),
-      h(WizardSaveButton, { onSave: null }),
+      }, "\u2190 Previous"),
+      h(WizardSaveButton, { onSave, dirty }),
       step < 3
-        ? h("button", { className:"btn btn-primary", onClick: () => onStepChange(step + 1) }, "Selanjutnya \u2192")
-        : h("button", { className:"btn btn-primary", onClick:onExit }, "Selesai")
+        ? h("button", { className:"btn btn-primary", onClick: () => onStepChange(step + 1) }, "Next \u2192")
+        : h("button", { className:"btn btn-primary", onClick:onExit }, "Done")
     )
   );
 }
@@ -1278,7 +1360,7 @@ function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser,
         h("div", { style:{ color:"#8B9BB4", fontSize:12, marginTop:2, whiteSpace:"nowrap" } }, "Delivery Management")
       ),
       h("button", {
-        onClick: onToggleCollapse, title: collapsed ? "Perluas menu" : "Ciutkan menu",
+        onClick: onToggleCollapse, title: collapsed ? "Expand menu" : "Collapse menu",
         style:{ background:"none", border:"1px solid rgba(255,255,255,0.18)", borderRadius:7, color:"#B7C3D6", padding:6, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", flexShrink:0, fontSize:13 }
       }, h(Icon.chevronRight, { style:{ transform: collapsed ? "none" : "rotate(180deg)" } }))
     ),
@@ -1334,7 +1416,7 @@ function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser,
         h("div", { style:{ color:"#8B9BB4", fontSize:11, marginTop:2 } }, roleLabel),
         h("div", { style:{ display:"flex", alignItems:"center", gap:5, marginTop:6 } },
           h("span", { style:{ width:6, height:6, borderRadius:999, background: supabaseClient ? "#4ADE80" : "#F59E0B", flexShrink:0 } }),
-          h("span", { style:{ color:"#8B9BB4", fontSize:10 } }, supabaseClient ? "Tersambung \u2014 real-time" : "Mode lokal (belum tersambung)")
+          h("span", { style:{ color:"#8B9BB4", fontSize:10 } }, supabaseClient ? "Connected \u2014 real-time" : "Local mode (not connected)")
         )
       ),
       h("button", {
@@ -1350,11 +1432,11 @@ function DocumentPlaceholderView({ title }) {
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ marginBottom:20 } },
       h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, title),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Halaman ini akan segera tersedia.")
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "This page will be available soon.")
     ),
     h("div", { className:"card", style:{ padding:"64px 24px", textAlign:"center" } },
       h(Icon.file, { style:{ fontSize:26, color:"#CBD5E1" } }),
-      h("div", { style:{ fontSize:13, color:"#94A3B8", marginTop:10 } }, "Belum ada konten untuk menu ini.")
+      h("div", { style:{ fontSize:13, color:"#94A3B8", marginTop:10 } }, "No content for this menu yet.")
     )
   );
 }
@@ -1362,26 +1444,40 @@ function DocumentPlaceholderView({ title }) {
 /* =========================================================================
    CHANGE MANAGEMENT
    ========================================================================= */
-function ChangeManagementView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, notes, onUpdateNotes, onSave, hideSelector, readOnly }) {
+function ChangeManagementView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, notes, onCommitNotes, hideSelector, readOnly, onDraftStateChange }) {
   const hasIdentity = norm(applicationText) && norm(projectText);
+  const useDraft = !!hideSelector;
+  const [draftNotes, setDraftNotes] = useState(() => notes || "");
+  const [dirty, setDirty] = useState(false);
+  const draftUpdateNotes = value => { setDraftNotes(value); setDirty(true); };
+  const commit = () => { onCommitNotes(draftNotes); setDirty(false); };
+  useEffect(() => {
+    if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
+  }, [dirty, draftNotes]);
+
+  const effNotes = useDraft ? draftNotes : (notes || "");
+  const effUpdateNotes = useDraft ? draftUpdateNotes : () => {};
+
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Change Management"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Catatan perubahan dan manajemen dampak per project.")
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Change Management"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Change notes and impact management per project.")
+      ),
+      useDraft && dirty && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes")
     ),
     !hideSelector && h(ProjectSelector, { application: applicationText, project: projectText, onApplicationChange, onProjectChange, projectList }),
     !hideSelector && !hasIdentity && h("div", { style:{ marginTop:16, fontSize:13, color:"#94A3B8", textAlign:"center", padding:"28px 0" } },
-      "Pilih Application dan Project di atas (data diambil dari menu Project List) untuk mengelola Change Management."
+      "Select Application and Project above (data comes from the Project List menu) to manage Change Management."
     ),
     hasIdentity && readOnly && h(ReadOnlyBanner),
     hasIdentity && h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
     h("div", { className:"card", style:{ marginTop:16 } },
       h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155", marginBottom:14 } }, "Notes"),
       h("textarea", {
-        value: notes || "", onChange: e => onUpdateNotes(e.target.value), placeholder:"Catatan change management\u2026",
+        value: effNotes, onChange: e => effUpdateNotes(e.target.value), placeholder:"Change management notes\u2026",
         style:{ width:"100%", minHeight:160, fontSize:13, border:"1px solid #E2E8F0", borderRadius:9, padding:"11px 13px", outline:"none", resize:"vertical", fontFamily:"inherit", lineHeight:1.5 }
-      }),
-      h(SaveButton, { onClick: onSave })
+      })
     )
     )
   );
@@ -1412,11 +1508,11 @@ function MasterListEditor({ items, onAdd, onUpdate, onRemove }) {
   return h("div", null,
     h("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 } },
       (!items || items.length === 0)
-        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"8px 0" } }, "Belum ada data.")
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"8px 0" } }, "No data yet.")
         : items.map((val, idx) => h("div", { key:idx, style:{ display:"flex", alignItems:"center", gap:8 } },
             h("div", { style:{ width:24, fontSize:12, color:"#94A3B8", flexShrink:0, textAlign:"right" } }, idx + 1),
             h("input", {
-              value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"Nilai\u2026",
+              value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"Value\u2026",
               style:{ flex:1, fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px", outline:"none" }
             }),
             h("button", { onClick:() => onRemove(idx), style:{ color:"#DC2626", background:"none", border:"none", display:"flex", fontSize:14, cursor:"pointer" } }, h(Icon.trash,{}))
@@ -1468,10 +1564,10 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
     h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Master Data Management"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar master data yang digunakan di seluruh aplikasi: Phase, Mountain, Stream & Sub-Stream, Applications, dan Delivery Model.")
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Manage the master data lists used across the app: Phase, Mountain, Stream & Sub-Stream, Applications, and Delivery Model.")
       ),
       !readOnly && h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
-        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "Ada perubahan belum disimpan"),
+        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes"),
         h("button", { className:"btn btn-primary", onClick:handleSave, disabled:!dirty }, "Save")
       )
     ),
@@ -1521,14 +1617,14 @@ function LoginView({ onLogin }) {
         h("div", { style:{ fontSize:13, color:"#64748B", marginTop:4 } }, "Delivery Management")
       ),
       h("div", { className:"card", style:{ padding:28 } },
-        h("div", { style:{ fontSize:16, fontWeight:700, color:"#1E293B", marginBottom:4 } }, "Masuk"),
-        h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } }, "Gunakan email yang sudah terdaftar di User Management."),
+        h("div", { style:{ fontSize:16, fontWeight:700, color:"#1E293B", marginBottom:4 } }, "Log In"),
+        h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } }, "Use an email already registered in User Management."),
         h("label", { style:{ fontSize:12, color:"#64748B", fontWeight:600, display:"block", marginBottom:6 } }, "Email"),
         h("input", {
           type:"email", value:email, autoFocus:true,
           onChange: e => { setEmail(e.target.value); if (error) setError(""); },
           onKeyDown: e => { if (e.key === "Enter") handleSubmit(); },
-          placeholder:"nama@perusahaan.com",
+          placeholder:"name@company.com",
           style:{ width:"100%", fontSize:14, border: error ? "1px solid #FCA5A5" : "1px solid #E2E8F0", borderRadius:8, padding:"10px 12px", outline:"none", marginBottom: error ? 8 : 16 }
         }),
         error && h("div", { style:{ fontSize:12, color:"#DC2626", marginBottom:16 } }, error),
@@ -1542,11 +1638,11 @@ function EmailListEditor({ emails, onAdd, onUpdate, onRemove }) {
   return h("div", null,
     h("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 } },
       (!emails || emails.length === 0)
-        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"8px 0" } }, "Belum ada email untuk role ini.")
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"8px 0" } }, "No emails for this role yet.")
         : emails.map((val, idx) => h("div", { key:idx, style:{ display:"flex", alignItems:"center", gap:8 } },
             h("div", { style:{ width:24, fontSize:12, color:"#94A3B8", flexShrink:0, textAlign:"right" } }, idx + 1),
             h("input", {
-              type:"email", value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"nama@perusahaan.com",
+              type:"email", value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"name@company.com",
               style:{ flex:1, fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px", outline:"none" }
             }),
             h("button", { onClick:() => onRemove(idx), style:{ color:"#DC2626", background:"none", border:"none", display:"flex", fontSize:14, cursor:"pointer" } }, h(Icon.trash,{}))
@@ -1601,10 +1697,10 @@ function UserManagementView({ userManagement, onSaveAll, readOnly }) {
     h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "User Management"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar email pengguna untuk setiap role: Super Admin, TPO, PMO, BPO, dan View Only.")
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Manage the list of user emails for each role: Super Admin, TPO, PMO, BPO, and View Only.")
       ),
       !readOnly && h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
-        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "Ada perubahan belum disimpan"),
+        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes"),
         h("button", { className:"btn btn-primary", onClick:handleSave, disabled:!dirty }, "Save")
       )
     ),
@@ -1645,7 +1741,7 @@ function LaunchReadinessChecklist({ readiness, onToggleItem }) {
 
   return h("div", { style:{ marginTop:4 } },
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, flexWrap:"wrap", gap:10 } },
-      h("div", { style:{ fontSize:12, color:"#64748B" } }, `${checkedCount} dari ${total} dokumen selesai`),
+      h("div", { style:{ fontSize:12, color:"#64748B" } }, `${checkedCount} of ${total} documents complete`),
       h("div", { style:{ fontSize:13, fontWeight:700, color: isComplete ? "#166534" : "#1E3A5F" } }, `${pct}%`)
     ),
     h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", marginBottom:18 } },
@@ -1721,7 +1817,7 @@ function ProjectCharterForm({ charter, onUpdateField }) {
       h("div", { style:{ display:"flex", alignItems:"center", gap:6, flexShrink:0 } },
         h("span", { style:{ fontSize:12, color:"#64748B", fontWeight:600 } }, "TPO:"),
         h("input", {
-          value: v("tpo"), onChange:e=>onUpdateField("tpo", e.target.value), placeholder:"Nama TPO",
+          value: v("tpo"), onChange:e=>onUpdateField("tpo", e.target.value), placeholder:"TPO name",
           style:{ fontSize:12, border:"1px solid #E2E8F0", borderRadius:6, padding:"5px 8px", outline:"none", width:170 }
         })
       )
@@ -1770,7 +1866,7 @@ function ReadOnlyBanner() {
       background:"#FFFBEB", border:"1px solid #FDE68A", color:"#92400E", fontSize:13 }
   },
     h(Icon.file, { style:{ flexShrink:0 } }),
-    h("span", null, "Mode lihat saja. Untuk mengedit data ini, buka project-nya melalui menu ", h("strong",null,"Project List"), ".")
+    h("span", null, "View-only mode. To edit this data, open the project via the ", h("strong",null,"Project List"), ".")
   );
 }
 
@@ -1786,7 +1882,7 @@ function CreateProjectField({ label, children }) {
 
 function MasterDataSelect({ value, options, onChange, style }) {
   return h("select", { value: value || "", onChange:e => onChange(e.target.value), style },
-    h("option", { value:"" }, "\u2014 pilih \u2014"),
+    h("option", { value:"" }, "\u2014 select \u2014"),
     (options || []).map(o => h("option", { key:o, value:o }, o))
   );
 }
@@ -1812,10 +1908,10 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
           h(MasterDataSelect, { value: form.deliveryModel, options: deliveryModelOptions, onChange: v => onFieldChange("deliveryModel", v), style:inputStyle }))),
       h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } },
         h(CreateProjectField, { label:"Project" },
-          h("input", { value: form.project, onChange:e => onFieldChange("project", e.target.value), placeholder:"Nama project\u2026", style:inputStyle }))),
+          h("input", { value: form.project, onChange:e => onFieldChange("project", e.target.value), placeholder:"Project name\u2026", style:inputStyle }))),
       h("div", { style:{ background:"#DCE9F7", borderBottom:cellBorder } },
         h(CreateProjectField, { label:"Resource" },
-          h("input", { value: form.resource, onChange:e => onFieldChange("resource", e.target.value), placeholder:"Nama resource\u2026", style:inputStyle }))),
+          h("input", { value: form.resource, onChange:e => onFieldChange("resource", e.target.value), placeholder:"Resource name\u2026", style:inputStyle }))),
       h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
         h(CreateProjectField, { label:"Mountain" },
           h(MasterDataSelect, { value: form.mountain, options: mountainOptions, onChange: v => onFieldChange("mountain", v), style:inputStyle }))),
@@ -1833,10 +1929,10 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
           h("input", { type:"date", value: form.endDate, onChange:e => onFieldChange("endDate", e.target.value), style:inputStyle }))),
       h("div", { style:{ background:"#EAF1F8", borderBottom:cellBorder } },
         h(CreateProjectField, { label:"TPO" },
-          h("input", { value: form.tpo, onChange:e => onFieldChange("tpo", e.target.value), placeholder:"Nama TPO", style:inputStyle }))),
+          h("input", { value: form.tpo, onChange:e => onFieldChange("tpo", e.target.value), placeholder:"TPO name", style:inputStyle }))),
       h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderBottom:cellBorder } },
         h(CreateProjectField, { label:"Delivery Lead" },
-          h("input", { value: form.deliveryLead, onChange:e => onFieldChange("deliveryLead", e.target.value), placeholder:"Nama Delivery Lead", style:inputStyle }))),
+          h("input", { value: form.deliveryLead, onChange:e => onFieldChange("deliveryLead", e.target.value), placeholder:"Delivery Lead name", style:inputStyle }))),
       h("div", { style:{ background:"#DCE9F7", borderBottom:cellBorder } },
         h(CreateProjectField, { label:"Priority" },
           h(RagSelect, { value: form.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onFieldChange("priority", v) }))),
@@ -1845,9 +1941,9 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
           h(RagSelect, { value: form.phase, options: phaseMeta.options, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg, onChange: v => onFieldChange("phase", v) }))),
       h("div", { style:{ background:"#EAF1F8" } })
     ),
-    h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", gap:10, borderTop:cellBorder } },
-      onCancel && h("button", { className:"btn", onClick:onCancel }, "Batal"),
-      h("button", { className:"btn btn-primary", onClick:onSubmit }, submitLabel || "Submit")
+    (onCancel || onSubmit) && h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", gap:10, borderTop:cellBorder } },
+      onCancel && h("button", { className:"btn", onClick:onCancel }, "Cancel"),
+      onSubmit && h("button", { className:"btn btn-primary", onClick:onSubmit }, submitLabel || "Submit")
     )
   );
 }
@@ -1856,44 +1952,46 @@ function CreateProjectView({ form, onFieldChange, onSubmit, phaseOptions, mounta
   return h("div", { style:{ maxWidth:900, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ marginBottom:20 } },
       h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Create Project"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Isi formulir berikut untuk menambahkan project baru ke Project List.")
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Fill in the form below to add a new project to the Project List.")
     ),
     h(CreateProjectForm, { form, onFieldChange, onSubmit, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions })
   );
 }
 
-/* Shows the project's core fields (Application, Delivery Model, Mountain,
-   Stream, etc. — same fields as Create Project) at the top of the Timeline
-   page, editable in place by the project's creator or a Super Admin. */
-function ProjectDetailsCard({ projectRow, onSave, currentUser, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions }) {
-  const editable = canModifyRecord(projectRow, currentUser);
-  const extractFields = row => ({
+/* Extracts the Create-Project-style field set from a Project List row
+   (used to seed drafts and for read-only display). */
+function extractProjectFields(row) {
+  return {
     application: (row && row.application) || "", deliveryModel: (row && row.deliveryModel) || "",
     project: (row && row.project) || "", resource: (row && row.resource) || "",
     mountain: (row && row.mountain) || "", stream: (row && row.stream) || "", subStream: (row && row.subStream) || "",
     startDate: (row && row.startDate) || "", endDate: (row && row.endDate) || "",
     tpo: (row && row.tpo) || "", deliveryLead: (row && row.deliveryLead) || "",
     priority: (row && row.priority) || "", phase: (row && row.phase) || ""
-  });
-  const [form, setForm] = useState(() => extractFields(projectRow));
-  useEffect(() => { setForm(extractFields(projectRow)); }, [projectRow && projectRow.id]);
-  const onFieldChange = (field, value) => setForm(f => ({ ...f, [field]: value }));
+  };
+}
 
+/* Shows the project's core fields (Application, Delivery Model, Mountain,
+   Stream, etc. — same fields as Create Project) at the bottom of the
+   Timeline page. Purely controlled — the parent (DetailView) owns the
+   draft and decides whether it's editable; there's no Save button here,
+   the wizard's single bottom Save button commits everything on the page. */
+function ProjectDetailsCard({ form, onFieldChange, editable, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions }) {
   return h("div", { className:"card", style:{ marginTop:16, padding:0, overflow:"hidden" } },
     !editable && h("div", { style:{ padding:"10px 16px", background:"#F8FAFC", borderBottom:"1px solid #E2E8F0", fontSize:12, color:"#94A3B8" } },
-      "Hanya pembuat project atau Super Admin yang bisa mengedit detail ini."
+      "Only the project creator or Super Admin can edit these details."
     ),
     h("div", { style: editable ? {} : { pointerEvents:"none", opacity:0.65 } },
       h(CreateProjectForm, {
-        form, onFieldChange, onSubmit: () => onSave(form),
+        form, onFieldChange,
         phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions,
-        formTitle: "Detail Project", submitLabel: "Save"
+        formTitle: "Project Details"
       })
     )
   );
 }
 
-function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave, currentUser }) {
+function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
   const docTypeListId = "doc-type-suggest";
   return h("div", null,
@@ -1908,7 +2006,7 @@ function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave, currentUser
         )),
         h("tbody", null,
           (!rows || rows.length === 0)
-            ? h("tr", null, h("td", { colSpan:4, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Belum ada dokumen. Klik "Add" untuk menambah baris.'))
+            ? h("tr", null, h("td", { colSpan:4, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No documents yet. Click "Add" to add a row.'))
             : rows.map((row, i) => {
               const editable = canModifyRecord(row, currentUser);
               return h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
@@ -1933,14 +2031,13 @@ function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave, currentUser
         )
       )
     ),
-    h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 } },
-      h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), "Add"),
-      h("button", { className:"btn btn-primary", onClick:onSave }, "Save")
+    h("div", { style:{ display:"flex", justifyContent:"flex-start", alignItems:"center", flexWrap:"wrap", gap:10 } },
+      h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), "Add")
     )
   );
 }
 
-function BaselineSection({ section, expanded, onToggle, onSave }) {
+function BaselineSection({ section, expanded, onToggle }) {
   return h("div", { className:"card", style:{ marginTop:16 } },
     h("div", {
       onClick: () => onToggle(section.key),
@@ -1949,34 +2046,69 @@ function BaselineSection({ section, expanded, onToggle, onSave }) {
       h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
       h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
     ),
-    expanded && h("div", null,
-      h("div", { style:{ padding:"44px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } },
-        "Belum ada konten untuk bagian ini."
-      ),
-      onSave && h(SaveButton, { onClick: onSave })
+    expanded && h("div", { style:{ padding:"44px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } },
+      "No content for this section yet."
     )
   );
 }
 
 function ProjectBaselineView({
   applicationText, projectText, onApplicationChange, onProjectChange, projectList,
-  charter, onUpdateCharterField, readiness, onToggleReadinessItem, onSaveSection,
-  documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow, hideSelector, readOnly, currentUser
+  charter, readiness, documentRows, onCommitBaseline, hideSelector, readOnly, currentUser, onDraftStateChange
 }) {
   const [expandedSections, setExpandedSections] = useState({ readiness:false, charter:false, benefit:false, stakeholder:false, risk:false, upload:false });
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
   const hasIdentity = norm(applicationText) && norm(projectText);
+  const useDraft = !!hideSelector;
+
+  const [draftCharter, setDraftCharter] = useState(() => charter || {});
+  const [draftReadiness, setDraftReadiness] = useState(() => readiness || {});
+  const [draftDocumentRows, setDraftDocumentRows] = useState(() => documentRows || []);
+  const [dirty, setDirty] = useState(false);
+  const markDirty = () => setDirty(true);
+
+  const draftUpdateCharterField = (field, value) => { setDraftCharter(c => ({ ...c, [field]:value })); markDirty(); };
+  const draftToggleReadinessItem = itemKey => { setDraftReadiness(r => ({ ...r, [itemKey]: !r[itemKey] })); markDirty(); };
+  const draftAddDocumentRow = () => {
+    setDraftDocumentRows(rows => [...rows, { id: uid(), docType:"", link:"", createdBy: currentUser ? currentUser.email : "" }]);
+    markDirty();
+  };
+  const draftUpdateDocumentRow = (rowId, field, value) => {
+    setDraftDocumentRows(rows => rows.map(r => r.id===rowId ? { ...r, [field]:value } : r));
+    markDirty();
+  };
+  const draftRemoveDocumentRow = rowId => { setDraftDocumentRows(rows => rows.filter(r => r.id!==rowId)); markDirty(); };
+
+  const effCharter = useDraft ? draftCharter : (charter || {});
+  const effReadiness = useDraft ? draftReadiness : (readiness || {});
+  const effDocumentRows = useDraft ? draftDocumentRows : (documentRows || []);
+  const effUpdateCharterField = useDraft ? draftUpdateCharterField : () => {};
+  const effToggleReadinessItem = useDraft ? draftToggleReadinessItem : () => {};
+  const effAddDocumentRow = useDraft ? draftAddDocumentRow : () => {};
+  const effUpdateDocumentRow = useDraft ? draftUpdateDocumentRow : () => {};
+  const effRemoveDocumentRow = useDraft ? draftRemoveDocumentRow : () => {};
+
+  const commit = () => {
+    onCommitBaseline({ charter: draftCharter, readiness: draftReadiness, documentRows: draftDocumentRows });
+    setDirty(false);
+  };
+  useEffect(() => {
+    if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
+  }, [dirty, draftCharter, draftReadiness, draftDocumentRows]);
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "PMO"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Dokumen baseline per project: Launch Readiness Checklist, Project Charter, Stakeholder Register, Benefit Register, Risk & Dependency Log, dan Documents.")
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "PMO"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Baseline documents per project: Launch Readiness Checklist, Project Charter, Stakeholder Register, Benefit Register, Risk & Dependency Log, and Documents.")
+      ),
+      useDraft && dirty && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes")
     ),
 
     !hideSelector && h(ProjectSelector, { application: applicationText, project: projectText, onApplicationChange, onProjectChange, projectList }),
 
     !hideSelector && !hasIdentity && h("div", { style:{ marginTop:16, fontSize:13, color:"#94A3B8", textAlign:"center", padding:"28px 0" } },
-      "Pilih Application dan Project di atas (data diambil dari menu Project List) untuk mengelola Project Baseline."
+      "Select Application and Project above (data comes from the Project List menu) to manage the Project Baseline."
     ),
 
     hasIdentity && readOnly && h(ReadOnlyBanner),
@@ -1993,7 +2125,7 @@ function ProjectBaselineView({
             h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
             h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
           ),
-          expanded && h(LaunchReadinessChecklist, { readiness, onToggleItem: onToggleReadinessItem })
+          expanded && h(LaunchReadinessChecklist, { readiness: effReadiness, onToggleItem: effToggleReadinessItem })
         );
       }
       if (section.key === "charter") {
@@ -2005,10 +2137,7 @@ function ProjectBaselineView({
             h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
             h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
           ),
-          expanded && h("div", null,
-            h(ProjectCharterForm, { charter, onUpdateField: onUpdateCharterField }),
-            h(SaveButton, { onClick: () => onSaveSection("charter") })
-          )
+          expanded && h(ProjectCharterForm, { charter: effCharter, onUpdateField: effUpdateCharterField })
         );
       }
       if (section.key === "upload") {
@@ -2021,12 +2150,11 @@ function ProjectBaselineView({
             h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
           ),
           expanded && h(DocumentsSection, {
-            rows: documentRows, onAdd: onAddDocumentRow, onUpdate: onUpdateDocumentRow, onRemove: onRemoveDocumentRow,
-            onSave: () => onSaveSection("upload"), currentUser
+            rows: effDocumentRows, onAdd: effAddDocumentRow, onUpdate: effUpdateDocumentRow, onRemove: effRemoveDocumentRow, currentUser
           })
         );
       }
-      return h(BaselineSection, { key:section.key, section, expanded, onToggle: toggleSection, onSave: () => onSaveSection(section.key) });
+      return h(BaselineSection, { key:section.key, section, expanded, onToggle: toggleSection });
     })
     )
   );
@@ -2117,27 +2245,11 @@ function AppRoot() {
       return { ...prev, [baselineKey]: { ...next, application: baselineApplicationText, project: baselineProjectText } };
     });
   };
-  const onUpdateCharterField = (field, value) => updateBaselineRecord(cur => ({ ...cur, charter: { ...(cur.charter || {}), [field]: value } }));
-  const onToggleReadinessItem = itemKey => updateBaselineRecord(cur => {
-    const current = cur.readiness || {};
-    return { ...cur, readiness: { ...current, [itemKey]: !current[itemKey] } };
-  });
-  const setReadinessTrue = itemKey => updateBaselineRecord(cur => ({ ...cur, readiness: { ...(cur.readiness || {}), [itemKey]: true } }));
-  const BASELINE_SAVE_TO_READINESS = { charter:"charter", benefit:"benefit", stakeholder:"stakeholder", risk:"risk", upload:"prd" };
-  const onSaveBaselineSection = sectionKey => setReadinessTrue(BASELINE_SAVE_TO_READINESS[sectionKey] || sectionKey);
-  const onAddDocumentRow = () => updateBaselineRecord(cur => ({
-    ...cur, documentRows: [...(cur.documentRows || []), { id: uid(), docType:"", link:"", createdBy: currentUser ? currentUser.email : "" }]
-  }));
-  const onUpdateDocumentRow = (rowId, field, value) => updateBaselineRecord(cur => ({
-    ...cur, documentRows: (cur.documentRows || []).map(r => r.id === rowId ? { ...r, [field]: value } : r)
-  }));
-  const onRemoveDocumentRow = rowId => updateBaselineRecord(cur => ({
-    ...cur, documentRows: (cur.documentRows || []).filter(r => r.id !== rowId)
-  }));
+  const onCommitBaseline = fields => updateBaselineRecord(cur => ({ ...cur, ...fields }));
 
   const cmKey = useMemo(() => makeKey(cmApplicationText, cmProjectText), [cmApplicationText, cmProjectText]);
   const changeManagementRecord = changeManagementRecords[cmKey] || { notes:"" };
-  const onUpdateCmNotes = value => setChangeManagementRecords(prev => ({
+  const onCommitNotes = value => setChangeManagementRecords(prev => ({
     ...prev, [cmKey]: { ...(prev[cmKey] || {}), notes: value, application: cmApplicationText, project: cmProjectText }
   }));
 
@@ -2151,15 +2263,49 @@ function AppRoot() {
     setWizardStep(1);
     setActiveView("project-wizard");
   };
-  const onExitWizard = () => setActiveView("list");
+
+  // Tracks whether the currently active wizard step (Timeline/PMO/Change
+  // Management) has unsaved edits, and how to commit them — set by
+  // whichever step is mounted via onWizardDraftStateChange. Any navigation
+  // away while dirty (wizard step change, exit, or clicking a sidebar
+  // menu) is routed through guardedNavigate, which shows a modal offering
+  // to save or discard before the navigation actually happens.
+  const [wizardDirty, setWizardDirty] = useState(false);
+  const wizardCommitRef = useRef(() => {});
+  const [pendingNavigation, setPendingNavigation] = useState(null);
+  const onWizardDraftStateChange = (isDirty, commitFn) => { setWizardDirty(isDirty); wizardCommitRef.current = commitFn; };
+  const commitActiveWizardStep = () => wizardCommitRef.current();
+  const guardedNavigate = action => {
+    if (wizardDirty) { setPendingNavigation(() => action); return; }
+    action();
+  };
+  const onSidebarNavigate = viewKey => guardedNavigate(() => setActiveView(viewKey));
+  const onWizardStepChange = newStep => guardedNavigate(() => setWizardStep(newStep));
+  const onExitWizard = () => guardedNavigate(() => setActiveView("list"));
+  const onConfirmSaveAndContinue = () => {
+    wizardCommitRef.current();
+    setWizardDirty(false);
+    wizardCommitRef.current = () => {};
+    const action = pendingNavigation;
+    setPendingNavigation(null);
+    if (action) action();
+  };
+  const onConfirmDiscardAndContinue = () => {
+    setWizardDirty(false);
+    wizardCommitRef.current = () => {};
+    const action = pendingNavigation;
+    setPendingNavigation(null);
+    if (action) action();
+  };
+  const onCancelNavigation = () => setPendingNavigation(null);
 
   const onSaveMasterData = draft => setMasterData({ ...DEFAULT_MASTER_DATA, ...draft });
   const onSaveUserManagement = draft => setUserManagement({ ...DEFAULT_USER_MANAGEMENT, ...draft });
 
   const onLogin = rawEmail => {
     const email = norm(rawEmail).toLowerCase();
-    if (!email) return { ok:false, message:"Email wajib diisi." };
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok:false, message:"Format email tidak valid." };
+    if (!email) return { ok:false, message:"Email is required." };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok:false, message:"Invalid email format." };
 
     const totalRegistered = USER_ROLES.reduce((sum, r) => sum + ((userManagement[r.key] || []).length), 0);
     let matchedRole = null;
@@ -2175,7 +2321,7 @@ function AppRoot() {
     }
 
     if (!matchedRole) {
-      return { ok:false, message:"Email tidak terdaftar. Hubungi Super Admin untuk didaftarkan di User Management." };
+      return { ok:false, message:"Email not registered. Contact Super Admin to be added in User Management." };
     }
 
     setCurrentUser({ email: norm(rawEmail), role: matchedRole });
@@ -2211,7 +2357,7 @@ function AppRoot() {
   const onCreateProjectFieldChange = (field, value) => setCreateProjectForm(f => ({ ...f, [field]: value }));
   const onSubmitCreateProject = () => {
     if (!norm(createProjectForm.application) || !norm(createProjectForm.project)) {
-      alert("Application dan Project wajib diisi.");
+      alert("Application and Project are required.");
       return;
     }
     setProjectList(list => [...list, { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "" }]);
@@ -2221,7 +2367,7 @@ function AppRoot() {
 
   const onSaveProjectFields = (projectId, fields) => {
     if (!norm(fields.application) || !norm(fields.project)) {
-      alert("Application dan Project wajib diisi.");
+      alert("Application and Project are required.");
       return;
     }
     setProjectList(list => list.map(r => r.id === projectId ? { ...r, ...fields } : r));
@@ -2257,40 +2403,9 @@ function AppRoot() {
     () => taskColumnOrder.filter(k => !taskHiddenColumns.includes(k) && COL_BY_KEY[k]).map(k => COL_BY_KEY[k]),
     [taskColumnOrder, taskHiddenColumns]
   );
-  const sortedTasks = useMemo(() => {
-    const tasks = record.tasks || [];
-    if (!sortConfig.key) return tasks;
-    const sk = sortConfig.key;
-    return [...tasks].sort((a, b) => {
-      const av = String(a[sk] || "").toLowerCase(), bv = String(b[sk] || "").toLowerCase();
-      if (av < bv) return sortConfig.dir === "asc" ? -1 : 1;
-      if (av > bv) return sortConfig.dir === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [record.tasks, sortConfig]);
   const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
 
-  const onAddTask = () => updateRecord(cur => {
-    const list = cur.tasks || [];
-    const maxNo = Math.max(0, ...list.map(t => parseInt(t.no) || 0));
-    const task = { id: uid(), no: String(maxNo + 1), task:"", startDate:"", endDate:"", pic:"", status:"", priority:"", phase:"", notes:"", createdBy: currentUser ? currentUser.email : "" };
-    return { ...cur, tasks: [...list, task] };
-  });
-  const onUpdateTask = (taskId, field, value) => updateRecord(cur => ({
-    ...cur, tasks: (cur.tasks || []).map(t => t.id === taskId ? { ...t, [field]: value } : t)
-  }));
-  const onRemoveTask = taskId => updateRecord(cur => ({ ...cur, tasks: (cur.tasks || []).filter(t => t.id !== taskId) }));
-  const onImportTasks = newTasks => updateRecord(cur => ({
-    ...cur, tasks: [...(cur.tasks || []), ...newTasks.map(t => ({ ...t, createdBy: currentUser ? currentUser.email : "" }))]
-  }));
-
-  const onAddTodo = () => updateRecord(cur => ({
-    ...cur, todos: [...(cur.todos || []), { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"", createdBy: currentUser ? currentUser.email : "" }]
-  }));
-  const onUpdateTodo = (todoId, field, value) => updateRecord(cur => ({
-    ...cur, todos: (cur.todos || []).map(t => t.id === todoId ? { ...t, [field]: value } : t)
-  }));
-  const onRemoveTodo = todoId => updateRecord(cur => ({ ...cur, todos: (cur.todos || []).filter(t => t.id !== todoId) }));
+  const onCommitRecord = (tasks, todos) => updateRecord(cur => ({ ...cur, tasks, todos }));
   const onToggleTodoColumn = colKey => setTodoHiddenColumns(c => c.includes(colKey) ? c.filter(k => k !== colKey) : [...c, colKey]);
 
   const onSubmitUpdate = text => {
@@ -2335,10 +2450,10 @@ function AppRoot() {
 
   const detailViewProps = {
     applicationText, projectText, onApplicationChange: setApplicationText, onProjectChange: setProjectText, projectList,
-    record, onAddTask, onUpdateTask, onRemoveTask, onImportTasks,
+    record, onCommitRecord,
     visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
-    sortConfig, onSort, sortedTasks,
-    onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
+    sortConfig, onSort,
+    todoHiddenColumns, onToggleTodoColumn,
     onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics,
     ganttHidden: taskGanttHidden, onToggleGantt: onToggleTaskGantt, currentUser,
     onSaveProjectFields, phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
@@ -2347,20 +2462,18 @@ function AppRoot() {
   const projectBaselineViewProps = {
     applicationText: baselineApplicationText, projectText: baselineProjectText,
     onApplicationChange: setBaselineApplicationText, onProjectChange: setBaselineProjectText,
-    projectList, charter: baselineRecord.charter, onUpdateCharterField,
-    readiness: baselineRecord.readiness, onToggleReadinessItem,
-    onSaveSection: onSaveBaselineSection,
-    documentRows: baselineRecord.documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow, currentUser
+    projectList, charter: baselineRecord.charter, readiness: baselineRecord.readiness,
+    documentRows: baselineRecord.documentRows, onCommitBaseline, currentUser
   };
   const changeManagementViewProps = {
     applicationText: cmApplicationText, projectText: cmProjectText,
     onApplicationChange: setCmApplicationText, onProjectChange: setCmProjectText,
-    projectList, notes: changeManagementRecord.notes, onUpdateNotes: onUpdateCmNotes, onSave: () => {}
+    projectList, notes: changeManagementRecord.notes, onCommitNotes
   };
 
   if (remoteLoading) {
     return h("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#F3F5F8" } },
-      h("div", { style:{ fontSize:13, color:"#64748B" } }, "Menyambungkan ke server\u2026")
+      h("div", { style:{ fontSize:13, color:"#64748B" } }, "Connecting to server\u2026")
     );
   }
 
@@ -2369,7 +2482,10 @@ function AppRoot() {
   }
 
   return h("div", { style:{ display:"flex", minHeight:"100vh", background:"#F3F5F8" } },
-    h(Sidebar, { active: activeView, onNavigate: setActiveView, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout }),
+    h(UnsavedChangesModal, {
+      open: pendingNavigation !== null, onSave: onConfirmSaveAndContinue, onDiscard: onConfirmDiscardAndContinue, onCancel: onCancelNavigation
+    }),
+    h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout }),
     h("div", { style:{ flex:1, minWidth:0 } },
       activeView === "create-project"
         ? h(CreateProjectView, {
@@ -2390,7 +2506,8 @@ function AppRoot() {
           })
         : activeView === "project-wizard"
         ? h(ProjectWizardView, {
-            step: wizardStep, onStepChange: setWizardStep, onExit: onExitWizard,
+            step: wizardStep, onStepChange: onWizardStepChange, onExit: onExitWizard,
+            dirty: wizardDirty, onDraftStateChange: onWizardDraftStateChange, onSave: commitActiveWizardStep,
             application: applicationText, project: projectText,
             timelineProps: { ...detailViewProps, hideSelector: true, readOnly: false },
             pmoProps: { ...projectBaselineViewProps, hideSelector: true, readOnly: false },
