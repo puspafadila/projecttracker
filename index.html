@@ -128,6 +128,7 @@ const Icon = {
   lock: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("rect",{x:3,y:11,width:18,height:11,rx:2}), h("path",{d:"M7 11V7a5 5 0 0 1 10 0v4"})),
   pencil: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M12 20h9"}), h("path",{d:"M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"})),
   database: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("ellipse",{cx:12,cy:5,rx:9,ry:3}), h("path",{d:"M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"}), h("path",{d:"M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"})),
+  chart: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("line",{x1:18,y1:20,x2:18,y2:10}), h("line",{x1:12,y1:20,x2:12,y2:4}), h("line",{x1:6,y1:20,x2:6,y2:14})),
   users: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"}), h("circle",{cx:9,cy:7,r:4}), h("path",{d:"M23 21v-2a4 4 0 0 0-3-3.87"}), h("path",{d:"M16 3.13a4 4 0 0 1 0 7.75"})),
 };
 
@@ -439,6 +440,36 @@ function plCellDisplay(colKey, row, phaseMeta, onOpenWizard) {
   }
 }
 
+/* Editable rendering for a Project List row the current user is allowed to
+   modify (the creator, or a Super Admin) — mirrors the read-only cells
+   above but with real inputs/dropdowns, updating the row immediately. */
+function plCellEditor(colKey, row, onUpdate, phaseMeta, masterOptions, onOpenWizard) {
+  const textStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
+  const dateStyle = { width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"5px 6px", outline:"none" };
+  switch (colKey) {
+    case "mountain": return h(MasterDataSelect, { value: row.mountain, options: masterOptions.mountainOptions, onChange: v => onUpdate("mountain", v), style:textStyle });
+    case "stream": return h(MasterDataSelect, { value: row.stream, options: masterOptions.streamOptions, onChange: v => onUpdate("stream", v), style:textStyle });
+    case "subStream": return h(MasterDataSelect, { value: row.subStream, options: masterOptions.subStreamOptions, onChange: v => onUpdate("subStream", v), style:textStyle });
+    case "application": return h(MasterDataSelect, { value: row.application, options: masterOptions.applicationOptions, onChange: v => onUpdate("application", v), style:textStyle });
+    case "deliveryModel": return h(MasterDataSelect, { value: row.deliveryModel, options: masterOptions.deliveryModelOptions, onChange: v => onUpdate("deliveryModel", v), style:textStyle });
+    case "project": return row.project
+      ? h("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
+          h("input", { value: row.project||"", onChange:e=>onUpdate("project", e.target.value), placeholder:"Project name\u2026", style:{ ...textStyle, flex:1 } }),
+          h("button", { onClick:()=>onOpenWizard(row.application, row.project), title:"Open Timeline, PMO, and Change Management",
+            style:{ background:"none", border:"none", color:"#1E3A5F", display:"flex", flexShrink:0, cursor:"pointer", fontSize:13 } }, h(Icon.chevronRight,{}))
+        )
+      : h("input", { value: row.project||"", onChange:e=>onUpdate("project", e.target.value), placeholder:"Project name\u2026", style:textStyle });
+    case "resource": return h("input", { value: row.resource||"", onChange:e=>onUpdate("resource", e.target.value), placeholder:"Resource name\u2026", style:textStyle });
+    case "startDate": return h("input", { type:"date", value: row.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
+    case "endDate": return h("input", { type:"date", value: row.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
+    case "tpo": return h("input", { value: row.tpo||"", onChange:e=>onUpdate("tpo", e.target.value), placeholder:"TPO name", style:textStyle });
+    case "deliveryLead": return h("input", { value: row.deliveryLead||"", onChange:e=>onUpdate("deliveryLead", e.target.value), placeholder:"Delivery Lead name", style:textStyle });
+    case "priority": return h(RagSelect, { value: row.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
+    case "phase": return h(RagSelect, { value: row.phase, options: phaseMeta.options, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg, onChange: v => onUpdate("phase", v) });
+    default: return null;
+  }
+}
+
 function PlHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, onFilterChange }) {
   const active = sortConfig.key === col.key;
   return h("div", {
@@ -461,7 +492,7 @@ const PL_COL_KEYS = PL_COLS.map(c => c.key);
 const PL_COL_BY_KEY = Object.fromEntries(PL_COLS.map(c => [c.key, c]));
 const DEFAULT_PL_COLUMN_ORDER = PL_COLS.map(c => c.key);
 
-function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard, columns, showGantt, currentUser }) {
+function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columns, showGantt, currentUser }) {
   const [filters, setFilters] = useState({});
   const ganttRange = useMemo(() => computeGanttRange(rows), [rows]);
   const weekCells = useMemo(() => buildWeekCells(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
@@ -474,6 +505,7 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
     const { bg, fg } = buildPhaseColorMaps(phaseOptions);
     return { options: phaseOptions || [], bg, fg };
   }, [phaseOptions]);
+  const masterOptions = { mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions };
 
   const columnOptions = useMemo(() => buildColumnOptions(rows, colKeys), [rows, colKeys]);
   const onFilterChange = (colKey, selected) => setFilters(f => ({ ...f, [colKey]: selected }));
@@ -511,6 +543,7 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
             ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "No projects match the filter.")
             : filteredRows.map((row, i) => {
               const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
+              const canDelete = !!(currentUser && currentUser.role === "superAdmin");
               return h("div", { key:row.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
                 h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
                   h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, i+1),
@@ -518,9 +551,9 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
                     plCellDisplay(c.key, row, phaseMeta, onOpenWizard)
                   )),
                   h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
-                    canModifyRecord(row, currentUser)
+                    canDelete
                       ? h("button", { onClick:()=>onRemove(row.id), title:"Delete project", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
-                      : h(OwnerLockNote, { record: row })
+                      : h("span", { title:"Only Super Admin can delete projects", style:{ color:"#CBD5E1", display:"flex" } }, h(Icon.lock,{}))
                   )
                 ),
                 showGantt && h("div", { style:{ width:timelineW, position:"relative", height:38 } },
@@ -534,10 +567,11 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
   );
 }
 
-function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
+function ProjectListView({ projectList, onUpdate, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
   const handleImportFile = e => {
+    if (!currentUser || currentUser.role !== "superAdmin") { e.target.value = ""; return; }
     const file = e.target.files[0];
     if (!file) { e.target.value = ""; return; }
     const reader = new FileReader();
@@ -577,6 +611,32 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
 
         if (imported.length === 0) {
           alert("No valid rows to import. Make sure the Application or Project column is filled in.");
+          return;
+        }
+
+        // Reject the whole import if any row's Application + Project
+        // combination is already in Project List, or repeats within the
+        // file itself — no duplicate projects allowed either way.
+        const comboKey = r => `${norm(r.application).toLowerCase()}\u2758${norm(r.project).toLowerCase()}`;
+        const existingCombos = new Set((projectList || []).map(comboKey));
+        const seenInFile = new Map();
+        const dupErrors = [];
+        imported.forEach((row, i) => {
+          const combo = comboKey(row);
+          if (!row.application && !row.project) return;
+          if (existingCombos.has(combo)) {
+            dupErrors.push(`Row ${i + 1}: Application "${row.application}" + Project "${row.project}" already exists in Project List`);
+          } else if (seenInFile.has(combo)) {
+            dupErrors.push(`Row ${i + 1}: duplicates row ${seenInFile.get(combo) + 1} in this file (Application "${row.application}" + Project "${row.project}")`);
+          } else {
+            seenInFile.set(combo, i);
+          }
+        });
+
+        if (dupErrors.length > 0) {
+          const shown = dupErrors.slice(0, 10).join("\n");
+          const more = dupErrors.length > 10 ? `\n\u2026and ${dupErrors.length - 10} more issue(s).` : "";
+          alert(`Import cancelled. Found ${dupErrors.length} duplicate Application + Project combination(s):\n\n${shown}${more}\n\nEach Application + Project combination must be unique.`);
           return;
         }
 
@@ -625,7 +685,7 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
         h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Master list of all projects and their weekly schedule. Click a Project name to fill in Timeline, PMO, and Change Management.")
       ),
       h("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
-        h("button", { className:"btn", onClick:triggerImport }, h(Icon.upload,{}), "Import"),
+        currentUser && currentUser.role === "superAdmin" && h("button", { className:"btn", onClick:triggerImport }, h(Icon.upload,{}), "Import"),
         h("input", { ref:fileInputRef, type:"file", accept:".xlsx,.xls", onChange:handleImportFile, style:{ display:"none" } }),
         h("button", { className:"btn btn-outline", onClick:onExport }, h(Icon.download,{}), "Export"),
         h(ColumnManager, { columnOrder, hiddenColumns, onToggleVisibility: onToggleColumnVisibility, onReorder: onReorderColumn, colByKey: PL_COL_BY_KEY,
@@ -634,7 +694,8 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
     ),
     h("div", { className:"card", style:{ padding:16 } },
       h(ProjectListTable, {
-        rows: projectList, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard,
+        rows: projectList, onUpdate, onRemove, sortConfig, onSort,
+        phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard,
         columns: columnOrder.filter(k => !hiddenColumns.includes(k) && PL_COL_BY_KEY[k]).map(k => PL_COL_BY_KEY[k]),
         showGantt: !ganttHidden, currentUser
       })
@@ -652,9 +713,7 @@ const COLS = [
   { key:"endDate", label:"End Date", width:124 },
   { key:"pic", label:"PIC", width:130 },
   { key:"status", label:"Status", width:126 },
-  { key:"priority", label:"Priority", width:104 },
   { key:"phase", label:"Phase", width:150 },
-  { key:"notes", label:"Notes", width:230 },
   { key:"action", label:"", width:40 },
 ];
 const COL_BY_KEY = Object.fromEntries(COLS.map(c => [c.key, c]));
@@ -1028,6 +1087,7 @@ function DetailView({
       norm(r.project).toLowerCase() === norm(projectText).toLowerCase()
     ) || null;
   }, [projectList, applicationText, projectText, hasIdentity]);
+  const canAddToProject = !!(projectRow && canModifyRecord(projectRow, currentUser));
 
   // Draft copies — edited freely, never touch global state until the
   // wizard's single Save button (in ProjectWizardView) commits them.
@@ -1038,6 +1098,7 @@ function DetailView({
   const markDirty = () => setDirty(true);
 
   const draftAddTask = () => {
+    if (!canAddToProject) return;
     setDraftTasks(list => {
       const maxNo = Math.max(0, ...list.map(t => parseInt(t.no) || 0));
       return [...list, { id: uid(), no:String(maxNo+1), task:"", startDate:"", endDate:"", pic:"", status:"", priority:"", phase:"", notes:"", createdBy: currentUser ? currentUser.email : "" }];
@@ -1046,9 +1107,17 @@ function DetailView({
   };
   const draftUpdateTask = (taskId, field, value) => { setDraftTasks(list => list.map(t => t.id===taskId ? { ...t, [field]:value } : t)); markDirty(); };
   const draftRemoveTask = taskId => { setDraftTasks(list => list.filter(t => t.id!==taskId)); markDirty(); };
-  const draftImportTasks = newTasks => { setDraftTasks(list => [...list, ...newTasks.map(t => ({ ...t, createdBy: currentUser ? currentUser.email : "" }))]); markDirty(); };
+  const draftImportTasks = newTasks => {
+    if (!canAddToProject) return;
+    setDraftTasks(list => [...list, ...newTasks.map(t => ({ ...t, createdBy: currentUser ? currentUser.email : "" }))]);
+    markDirty();
+  };
 
-  const draftAddTodo = () => { setDraftTodos(list => [...list, { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"", createdBy: currentUser ? currentUser.email : "" }]); markDirty(); };
+  const draftAddTodo = () => {
+    if (!canAddToProject) return;
+    setDraftTodos(list => [...list, { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"", createdBy: currentUser ? currentUser.email : "" }]);
+    markDirty();
+  };
   const draftUpdateTodo = (todoId, field, value) => { setDraftTodos(list => list.map(t => t.id===todoId ? { ...t, [field]:value } : t)); markDirty(); };
   const draftRemoveTodo = todoId => { setDraftTodos(list => list.filter(t => t.id!==todoId)); markDirty(); };
 
@@ -1084,7 +1153,12 @@ function DetailView({
     });
   }, [effectiveTasks, sortConfig]);
 
+  // Overall Timeline progress: Done items (from both the task table and
+  // the to-do table) over all items that aren't Cancelled.
+  const timelineProgress = useMemo(() => computeTimelineProgress(effectiveTasks, effectiveTodos), [effectiveTasks, effectiveTodos]);
+
   const handleImportFile = e => {
+    if (!canAddToProject) { e.target.value = ""; return; }
     const file = e.target.files[0];
     if (!file) { e.target.value = ""; return; }
     const reader = new FileReader();
@@ -1119,9 +1193,7 @@ function DetailView({
           endDate: toISODate(pick(row,"End Date","EndDate")),
           pic: String(pick(row,"PIC") || ""),
           status: String(pick(row,"Status") || ""),
-          priority: String(pick(row,"Priority") || ""),
-          phase: String(pick(row,"Phase") || ""),
-          notes: String(pick(row,"Notes") || "")
+          phase: String(pick(row,"Phase") || "")
         })).filter(t => t.task);
         if (imported.length === 0) alert("No valid rows to import. Make sure the Task column is filled in.");
         else { effImportTasks(imported); alert(`${imported.length} task(s) imported \u2014 click Save at the bottom of the page to keep them.`); }
@@ -1176,6 +1248,17 @@ function DetailView({
       "Select Application and Project above (data comes from the Project List menu) to start managing task details, to-dos, and updates."
     ),
 
+    hasIdentity && h("div", { className:"card", style:{ marginTop:16 } },
+      h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, flexWrap:"wrap", gap:10 } },
+        h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, "Timeline Progress"),
+        h("div", { style:{ fontSize:12, color:"#64748B" } }, `${timelineProgress.done} of ${timelineProgress.total} items done`),
+        h("div", { style:{ fontSize:15, fontWeight:700, color: timelineProgress.pct === 100 ? "#166534" : "#1E3A5F" } }, `${timelineProgress.pct}%`)
+      ),
+      h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden" } },
+        h("div", { style:{ height:"100%", width:`${timelineProgress.pct}%`, background: timelineProgress.pct === 100 ? "#22C55E" : "#4F9D9D", borderRadius:6, transition:"width .3s ease" } })
+      )
+    ),
+
     hasIdentity && readOnly && h(ReadOnlyBanner),
 
     hasIdentity && h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
@@ -1183,20 +1266,21 @@ function DetailView({
       h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:14 } },
         h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, "Project Timeline"),
         h("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
-          h("button", { className:"btn btn-outline", onClick:triggerImport },
+          canAddToProject && h("button", { className:"btn btn-outline", onClick:triggerImport },
             h(Icon.upload,{}), "Import"),
           h("input", { ref:fileInputRef, type:"file", accept:".xlsx,.xls", onChange:handleImportFile, style:{ display:"none" } }),
           h("button", { className:"btn btn-outline", onClick:exportDetailProject },
             h(Icon.download,{}), "Export Project Timeline"),
           h(ColumnManager, { columnOrder:taskColumnOrder, hiddenColumns:taskHiddenColumns, onToggleVisibility:onToggleColumnVisibility, onReorder:onReorderColumn,
             extraToggle: { label:"Gantt Chart", checked: !ganttHidden, onToggle: onToggleGantt } }),
-          h("button", { className:"btn btn-primary", onClick:effAddTask },
+          canAddToProject && h("button", { className:"btn btn-primary", onClick:effAddTask },
             h(Icon.plus,{}), "Add Task")
         )
       ),
       h("datalist", { id:picListId }, pics.map(p => h("option", { key:p, value:p }))),
       sortedTasks.length === 0
-        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } }, 'No tasks yet. Click "Add Task" or import from an Excel file.')
+        ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } },
+            canAddToProject ? 'No tasks yet. Click "Add Task" or import from an Excel file.' : "No tasks yet.")
         : h(TaskTable, { tasks: sortedTasks, onUpdateTask: effUpdateTask, onRemoveTask: effRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser })
     ),
 
@@ -1206,7 +1290,7 @@ function DetailView({
           h(Icon.checklist,{style:{color:"#4F9D9D"}}), "Tasks"),
         h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
           h(TodoColumnManager, { hiddenColumns: todoHiddenColumns, onToggleVisibility: onToggleTodoColumn }),
-          h("button", { className:"btn btn-primary", onClick:effAddTodo },
+          canAddToProject && h("button", { className:"btn btn-primary", onClick:effAddTodo },
             h(Icon.plus,{}), "Add Task")
         )
       ),
@@ -1232,12 +1316,13 @@ function DetailView({
    SIDEBAR + ROOT APP
    ========================================================================= */
 const NAV_ITEMS = [
+  { key:"dashboard-report", label:"Dashboard Report", icon:Icon.chart },
   { key:"create-project", label:"Create Project", icon:Icon.plus },
   { key:"list", label:"Project List", icon:Icon.grid },
-  { key:"document", label:"Template", icon:Icon.file, children:[
+  { key:"document", label:"View Documents", icon:Icon.file, children:[
     { key:"detail", label:"Timeline" },
-    { key:"doc-baseline", label:"PMO" },
-    { key:"doc-stakeholder", label:"Change Management" },
+    { key:"doc-baseline", label:"PMO Documents" },
+    { key:"doc-stakeholder", label:"CM Documents" },
   ] },
   { key:"master-data", label:"Master Data Management", icon:Icon.database },
   { key:"user-management", label:"User Management", icon:Icon.users },
@@ -1286,8 +1371,8 @@ function WizardSaveButton({ onSave, dirty }) {
 
 const WIZARD_STEPS = [
   { n:1, label:"Timeline" },
-  { n:2, label:"PMO" },
-  { n:3, label:"Change Management" },
+  { n:2, label:"PMO Documents" },
+  { n:3, label:"CM Documents" },
 ];
 
 function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChange, onSave, application, project, timelineProps, pmoProps, cmProps }) {
@@ -1339,7 +1424,10 @@ function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChan
 }
 
 function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser, onLogout }) {
-  const activeGroup = NAV_ITEMS.find(it => it.children && it.children.some(c => c.key === active));
+  const visibleNavItems = (currentUser && currentUser.role === "superAdmin")
+    ? NAV_ITEMS
+    : NAV_ITEMS.filter(it => it.key === "dashboard-report" || it.key === "create-project" || it.key === "list");
+  const activeGroup = visibleNavItems.find(it => it.children && it.children.some(c => c.key === active));
   const [expandedGroups, setExpandedGroups] = useState({ document: true });
   const toggleGroup = key => setExpandedGroups(g => ({ ...g, [key]: !g[key] }));
   const onGroupHeaderClick = key => {
@@ -1356,7 +1444,7 @@ function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser,
         display:"flex", alignItems:"center", justifyContent: collapsed ? "center" : "space-between", gap:8 }
     },
       !collapsed && h("div", null,
-        h("div", { style:{ color:"#fff", fontWeight:600, fontSize:14, whiteSpace:"nowrap" } }, "Project Tracker"),
+        h("div", { style:{ color:"#fff", fontWeight:600, fontSize:14, whiteSpace:"nowrap" } }, "PMO"),
         h("div", { style:{ color:"#8B9BB4", fontSize:12, marginTop:2, whiteSpace:"nowrap" } }, "Delivery Management")
       ),
       h("button", {
@@ -1365,7 +1453,7 @@ function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser,
       }, h(Icon.chevronRight, { style:{ transform: collapsed ? "none" : "rotate(180deg)" } }))
     ),
     h("div", { style:{ flex:1 } },
-      NAV_ITEMS.map(it => {
+      visibleNavItems.map(it => {
         if (!it.children) {
           return h("div", {
             key: it.key, onClick: () => onNavigate(it.key), title: collapsed ? it.label : undefined,
@@ -1718,18 +1806,25 @@ function UserManagementView({ userManagement, onSaveAll, readOnly }) {
 const BASELINE_SECTIONS = [
   { key:"readiness", label:"Launch Readiness Checklist" },
   { key:"charter", label:"Project Charter" },
+  { key:"changeRequest", label:"Change Request Log" },
   { key:"stakeholder", label:"Stakeholder Register" },
   { key:"benefit", label:"Benefit Register" },
-  { key:"risk", label:"Risk & Dependency Log" },
+  { key:"dependency", label:"Dependency Log" },
+  { key:"riskLog", label:"Risk Log" },
+  { key:"lessonsLearned", label:"Lesson Learned" },
   { key:"upload", label:"Documents" },
 ];
 
 const READINESS_ITEMS = [
-  { key:"charter", label:"Project Charter" },
-  { key:"benefit", label:"Benefit Register" },
-  { key:"prd", label:"PRD" },
-  { key:"stakeholder", label:"Stakeholder Register" },
-  { key:"risk", label:"Risk & Dependency Log", optional:true },
+  { key:"timeline", label:"Timeline", auto:true },
+  { key:"charter", label:"Project Charter", auto:true },
+  { key:"changeRequest", label:"Change Request Log", auto:true },
+  { key:"stakeholder", label:"Stakeholder Register", auto:true },
+  { key:"benefit", label:"Benefit Register", auto:true },
+  { key:"dependency", label:"Dependency Log", auto:true },
+  { key:"riskLog", label:"Risk Log", auto:true },
+  { key:"lessonsLearned", label:"Lesson Learned", auto:true },
+  { key:"document", label:"Documents", auto:true },
 ];
 
 function LaunchReadinessChecklist({ readiness, onToggleItem }) {
@@ -1751,9 +1846,9 @@ function LaunchReadinessChecklist({ readiness, onToggleItem }) {
       items.map(item => {
         const checked = !!(readiness && readiness[item.key]);
         return h("div", {
-          key:item.key, onClick: () => onToggleItem(item.key),
+          key:item.key, onClick: item.auto ? undefined : () => onToggleItem(item.key), title: item.auto ? "Automatically checked once every Project Charter field is filled in" : undefined,
           style:{
-            display:"flex", alignItems:"center", gap:12, padding:"14px 16px", borderRadius:11, cursor:"pointer",
+            display:"flex", alignItems:"center", gap:12, padding:"14px 16px", borderRadius:11, cursor: item.auto ? "default" : "pointer",
             border: checked ? "1px solid #86EFAC" : "1px solid #E2E8F0",
             background: checked ? "#F0FDF4" : "#fff"
           }
@@ -1767,7 +1862,7 @@ function LaunchReadinessChecklist({ readiness, onToggleItem }) {
           }, checked && h(Icon.check, { style:{ color:"#fff" } })),
           h("div", { style:{ flex:1, minWidth:0 } },
             h("div", { style:{ fontSize:13, fontWeight:600, color: checked ? "#166534" : "#334155" } }, item.label),
-            item.optional && h("div", { style:{ fontSize:11, color:"#94A3B8", marginTop:1 } }, "Optional")
+            (item.optional || item.auto) && h("div", { style:{ fontSize:11, color:"#94A3B8", marginTop:1 } }, item.auto ? "Auto" : "Optional")
           )
         );
       })
@@ -1788,6 +1883,39 @@ const CHARTER_FIELDS = {
   risk: { label:"High Level Risk & Mitigation*", hint:"Describe any key risks to the project, along with corresponding impact and mitigation plans to prevent those risks from being realized." },
   stakeholders: { label:"Key Stakeholders", hint:"Stakeholders who have the influence and authority to dictate whether a project is considered a success or not." },
 };
+/* Shared Timeline progress calculation — Done items over all items that
+   aren't Cancelled, across both the task table and the to-do table. Used
+   on the Timeline page itself and to auto-derive the "Timeline" item on
+   the PMO Launch Readiness Checklist. */
+function computeTimelineProgress(tasks, todos) {
+  const items = [...(tasks || []), ...(todos || [])];
+  const counted = items.filter(t => norm(t.status).toLowerCase() !== "cancelled");
+  const done = counted.filter(t => norm(t.status).toLowerCase() === "done").length;
+  const total = counted.length;
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+/* All fields on the Project Charter form — including the title/TPO bar —
+   used to auto-derive the "Project Charter" item on the Launch Readiness
+   Checklist: true only once every one of these has something in it. */
+const ALL_CHARTER_FIELD_KEYS = ["projectTitle", "tpo", ...Object.keys(CHARTER_FIELDS)];
+function isCharterComplete(charter) {
+  return ALL_CHARTER_FIELD_KEYS.every(k => norm(charter && charter[k]).length > 0);
+}
+/* "Document" on the checklist reflects the Documents table: true once at
+   least one row exists and every row has Document Type, Description, and
+   Link all filled in. */
+function isDocumentSectionComplete(documentRows) {
+  const rows = documentRows || [];
+  if (rows.length === 0) return false;
+  return rows.every(r => norm(r.docType).length > 0 && norm(r.description).length > 0 && norm(r.link).length > 0);
+}
+/* Change Request Log, Stakeholder Register, Benefit Register, Dependency
+   Log, Risk Log, and Lessons Learned don't have real fields yet (still
+   placeholder sections) — until they do, there's nothing to check, so
+   they stay incomplete. */
+function isPlaceholderSectionComplete() {
+  return false;
+}
 
 function CharterField({ label, hint, value, onChange, minHeight }) {
   return h("div", { style:{ padding:"14px 16px", display:"flex", flexDirection:"column", gap:6, height:"100%" } },
@@ -1991,30 +2119,36 @@ function ProjectDetailsCard({ form, onFieldChange, editable, phaseOptions, mount
   );
 }
 
-function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser }) {
+const DOCUMENT_TYPE_OPTS = ["PRD", "Security Assessment", "Hypercare Issue Log", "Others"];
+
+function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser, canAdd }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
-  const docTypeListId = "doc-type-suggest";
   return h("div", null,
-    h("datalist", { id:docTypeListId }, h("option", { value:"PRD" }), h("option", { value:"Mockup" })),
     h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12, marginTop:8, marginBottom:16 } },
       h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
         h("thead", null, h("tr", { style:{ background:"#152238" } },
           h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600, width:56 } }, "No"),
-          h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Document Type"),
+          h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600, width:190 } }, "Document Type"),
+          h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Description"),
           h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Insert Link"),
           h("th", { style:{ width:40, background:"#152238" } })
         )),
         h("tbody", null,
           (!rows || rows.length === 0)
-            ? h("tr", null, h("td", { colSpan:4, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No documents yet. Click "Add" to add a row.'))
+            ? h("tr", null, h("td", { colSpan:5, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No documents yet. Click "Add" to add a row.'))
             : rows.map((row, i) => {
               const editable = canModifyRecord(row, currentUser);
               return h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, i + 1),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
                   editable
-                    ? h("input", { value: row.docType || "", onChange:e => onUpdate(row.id, "docType", e.target.value), list:docTypeListId, placeholder:"PRD, Mockup, atau lainnya\u2026", style:inputStyle })
+                    ? h(MasterDataSelect, { value: row.docType, options: DOCUMENT_TYPE_OPTS, onChange: v => onUpdate(row.id, "docType", v), style:inputStyle })
                     : h("span", { style:{ fontSize:13, color:"#334155" } }, row.docType || "\u2014")
+                ),
+                h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
+                  editable
+                    ? h("input", { value: row.description || "", onChange:e => onUpdate(row.id, "description", e.target.value), placeholder:"Short description\u2026", style:inputStyle })
+                    : h("span", { style:{ fontSize:13, color:"#334155" } }, row.description || "\u2014")
                 ),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
                   editable
@@ -2031,9 +2165,103 @@ function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser }) {
         )
       )
     ),
-    h("div", { style:{ display:"flex", justifyContent:"flex-start", alignItems:"center", flexWrap:"wrap", gap:10 } },
+    canAdd && h("div", { style:{ display:"flex", justifyContent:"flex-start", alignItems:"center", flexWrap:"wrap", gap:10 } },
       h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), "Add")
-    )
+    ),
+    !canAdd && h("div", { style:{ fontSize:12, color:"#94A3B8" } }, "Only the project creator or Super Admin can add documents.")
+  );
+}
+
+/* ---------- PMO log tables (Change Request Log, Stakeholder Register,
+   Benefit Register, Dependency Log, Risk Log, Lesson Learned) ----------
+   All six share the same row shape (id + arbitrary fields + createdBy)
+   and the same table chrome, so one generic component renders all of
+   them from a column spec. */
+const CR_LOG_COLUMNS = [
+  { key:"crId", label:"CR ID", type:"text" },
+  { key:"date", label:"Date", type:"date" },
+  { key:"description", label:"CR Description", type:"text" },
+  { key:"requester", label:"Requester", type:"text" },
+  { key:"status", label:"Status", type:"select", options:["Not started","On progress CR","On progress assessment","Development","Done Development","Hold","Cancelled"] },
+  { key:"notes", label:"Notes", type:"text" },
+  { key:"link", label:"CR Link", type:"text" },
+];
+const STAKEHOLDER_COLUMNS = [
+  { key:"name", label:"Name", type:"text" },
+  { key:"email", label:"Email", type:"text" },
+  { key:"role", label:"Role In Project", type:"text" },
+  { key:"interest", label:"Interest/Expectation", type:"text" },
+  { key:"communication", label:"Communication", type:"text" },
+];
+const BENEFIT_COLUMNS = [
+  { key:"date", label:"Date", type:"date" },
+  { key:"description", label:"Benefit Description", type:"text" },
+  { key:"baselineMetrics", label:"Baseline Metrics", type:"text" },
+  { key:"targetMetrics", label:"Target Metrics", type:"text" },
+  { key:"beneficiaries", label:"Beneficiaries", type:"text" },
+  { key:"pic", label:"PIC", type:"text" },
+  { key:"status", label:"Status", type:"text" },
+];
+const DEPENDENCY_COLUMNS = [
+  { key:"date", label:"Date", type:"date" },
+  { key:"description", label:"Dependency Description", type:"text" },
+  { key:"pic", label:"PIC", type:"text" },
+  { key:"status", label:"Status", type:"select", options:["Open","Closed","Cancelled"] },
+];
+const RISK_LOG_COLUMNS = [
+  { key:"date", label:"Date", type:"date" },
+  { key:"description", label:"Risk Description", type:"text" },
+  { key:"impact", label:"Impact", type:"text" },
+  { key:"mitigation", label:"Mitigation", type:"text" },
+  { key:"pic", label:"PIC", type:"text" },
+  { key:"status", label:"Status", type:"select", options:["Open","Mitigated","Dropped"] },
+];
+const LESSON_LEARNED_COLUMNS = [
+  { key:"date", label:"Date", type:"date" },
+  { key:"issueSuccess", label:"Issue/Success", type:"text" },
+  { key:"result", label:"Result", type:"text" },
+  { key:"lessonLearned", label:"Lesson Learned", type:"text" },
+];
+
+function EditableLogTable({ columns, rows, onAdd, onUpdate, onRemove, currentUser, canAdd, addLabel, lockedNote, showRowNumber = true }) {
+  const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
+  const colSpanCount = columns.length + (showRowNumber ? 2 : 1);
+  return h("div", null,
+    h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12, marginTop:8, marginBottom:16 } },
+      h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+        h("thead", null, h("tr", { style:{ background:"#152238" } },
+          showRowNumber && h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600, width:48 } }, "No"),
+          columns.map(c => h("th", { key:c.key, style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, c.label)),
+          h("th", { style:{ width:40, background:"#152238" } })
+        )),
+        h("tbody", null,
+          (!rows || rows.length === 0)
+            ? h("tr", null, h("td", { colSpan: colSpanCount, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No entries yet. Click "Add" to add a row.'))
+            : rows.map((row, i) => {
+              const editable = canModifyRecord(row, currentUser);
+              return h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
+                showRowNumber && h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, i + 1),
+                columns.map(c => h("td", { key:c.key, style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
+                  !editable
+                    ? h("span", { style:{ fontSize:13, color:"#334155" } }, row[c.key] || "\u2014")
+                    : c.type === "select"
+                    ? h(MasterDataSelect, { value: row[c.key], options: c.options, onChange: v => onUpdate(row.id, c.key, v), style:inputStyle })
+                    : h("input", { type: c.type === "date" ? "date" : "text", value: row[c.key] || "", onChange:e => onUpdate(row.id, c.key, e.target.value), style:inputStyle })
+                )),
+                h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", textAlign:"center" } },
+                  editable
+                    ? h("button", { onClick:() => onRemove(row.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex", margin:"0 auto" } }, h(Icon.trash,{}))
+                    : h("div", { style:{ display:"flex", justifyContent:"center" } }, h(OwnerLockNote, { record: row }))
+                )
+              );
+            })
+        )
+      )
+    ),
+    canAdd && h("div", { style:{ display:"flex", justifyContent:"flex-start", alignItems:"center", flexWrap:"wrap", gap:10 } },
+      h("button", { className:"btn", onClick:onAdd }, h(Icon.plus,{}), addLabel || "Add")
+    ),
+    !canAdd && h("div", { style:{ fontSize:12, color:"#94A3B8" } }, lockedNote || "Only the project creator or Super Admin can add entries.")
   );
 }
 
@@ -2052,25 +2280,53 @@ function BaselineSection({ section, expanded, onToggle }) {
   );
 }
 
+/* Draft state + add/update/remove for one PMO log table. Always call this
+   the same number of times, in the same order, in the parent component —
+   it's a normal React hook underneath. */
+function useLogRowsDraft(initialRows, canAdd, currentUser, markDirty) {
+  const [rows, setRows] = useState(() => initialRows || []);
+  const add = () => {
+    if (!canAdd) return;
+    setRows(list => [...list, { id: uid(), createdBy: currentUser ? currentUser.email : "" }]);
+    markDirty();
+  };
+  const update = (rowId, field, value) => {
+    setRows(list => list.map(r => r.id === rowId ? { ...r, [field]: value } : r));
+    markDirty();
+  };
+  const remove = rowId => { setRows(list => list.filter(r => r.id !== rowId)); markDirty(); };
+  return [rows, add, update, remove];
+}
+
 function ProjectBaselineView({
   applicationText, projectText, onApplicationChange, onProjectChange, projectList,
-  charter, readiness, documentRows, onCommitBaseline, hideSelector, readOnly, currentUser, onDraftStateChange
+  charter, readiness, documentRows, changeRequestRows, stakeholderRows, benefitRows, dependencyRows, riskLogRows, lessonsLearnedRows,
+  timelineTasks, timelineTodos,
+  onCommitBaseline, hideSelector, readOnly, currentUser, onDraftStateChange
 }) {
   const [expandedSections, setExpandedSections] = useState({ readiness:false, charter:false, benefit:false, stakeholder:false, risk:false, upload:false });
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
   const hasIdentity = norm(applicationText) && norm(projectText);
   const useDraft = !!hideSelector;
+  const hasIdentity2 = norm(applicationText) && norm(projectText);
+  const projectRow = useMemo(() => {
+    if (!hasIdentity2) return null;
+    return (projectList || []).find(r =>
+      norm(r.application).toLowerCase() === norm(applicationText).toLowerCase() &&
+      norm(r.project).toLowerCase() === norm(projectText).toLowerCase()
+    ) || null;
+  }, [projectList, applicationText, projectText, hasIdentity2]);
+  const canAddToProject = !!(projectRow && canModifyRecord(projectRow, currentUser));
 
   const [draftCharter, setDraftCharter] = useState(() => charter || {});
-  const [draftReadiness, setDraftReadiness] = useState(() => readiness || {});
   const [draftDocumentRows, setDraftDocumentRows] = useState(() => documentRows || []);
   const [dirty, setDirty] = useState(false);
   const markDirty = () => setDirty(true);
 
   const draftUpdateCharterField = (field, value) => { setDraftCharter(c => ({ ...c, [field]:value })); markDirty(); };
-  const draftToggleReadinessItem = itemKey => { setDraftReadiness(r => ({ ...r, [itemKey]: !r[itemKey] })); markDirty(); };
   const draftAddDocumentRow = () => {
-    setDraftDocumentRows(rows => [...rows, { id: uid(), docType:"", link:"", createdBy: currentUser ? currentUser.email : "" }]);
+    if (!canAddToProject) return;
+    setDraftDocumentRows(rows => [...rows, { id: uid(), docType:"", description:"", link:"", createdBy: currentUser ? currentUser.email : "" }]);
     markDirty();
   };
   const draftUpdateDocumentRow = (rowId, field, value) => {
@@ -2079,28 +2335,78 @@ function ProjectBaselineView({
   };
   const draftRemoveDocumentRow = rowId => { setDraftDocumentRows(rows => rows.filter(r => r.id!==rowId)); markDirty(); };
 
+  const [draftChangeRequestRows, addChangeRequestRow, updateChangeRequestRow, removeChangeRequestRow] = useLogRowsDraft(changeRequestRows, canAddToProject, currentUser, markDirty);
+  const [draftStakeholderRows, addStakeholderRow, updateStakeholderRow, removeStakeholderRow] = useLogRowsDraft(stakeholderRows, canAddToProject, currentUser, markDirty);
+  const [draftBenefitRows, addBenefitRow, updateBenefitRow, removeBenefitRow] = useLogRowsDraft(benefitRows, canAddToProject, currentUser, markDirty);
+  const [draftDependencyRows, addDependencyRow, updateDependencyRow, removeDependencyRow] = useLogRowsDraft(dependencyRows, canAddToProject, currentUser, markDirty);
+  const [draftRiskLogRows, addRiskLogRow, updateRiskLogRow, removeRiskLogRow] = useLogRowsDraft(riskLogRows, canAddToProject, currentUser, markDirty);
+  const [draftLessonsLearnedRows, addLessonsLearnedRow, updateLessonsLearnedRow, removeLessonsLearnedRow] = useLogRowsDraft(lessonsLearnedRows, canAddToProject, currentUser, markDirty);
+
   const effCharter = useDraft ? draftCharter : (charter || {});
-  const effReadiness = useDraft ? draftReadiness : (readiness || {});
   const effDocumentRows = useDraft ? draftDocumentRows : (documentRows || []);
+  const effChangeRequestRows = useDraft ? draftChangeRequestRows : (changeRequestRows || []);
+  const effStakeholderRows = useDraft ? draftStakeholderRows : (stakeholderRows || []);
+  const effBenefitRows = useDraft ? draftBenefitRows : (benefitRows || []);
+  const effDependencyRows = useDraft ? draftDependencyRows : (dependencyRows || []);
+  const effRiskLogRows = useDraft ? draftRiskLogRows : (riskLogRows || []);
+  const effLessonsLearnedRows = useDraft ? draftLessonsLearnedRows : (lessonsLearnedRows || []);
+
+  // Every row's non-id, non-createdBy fields must all be filled for that
+  // row to count — and the section needs at least one row.
+  const isRowsSectionComplete = (rows, columnKeys) => {
+    if (!rows || rows.length === 0) return false;
+    return rows.every(r => columnKeys.every(k => norm(r[k]).length > 0));
+  };
+
+  // The whole checklist is derived, not stored — every item reflects the
+  // real state of its section, so it can never go stale or be faked.
+  const isTimelineComplete = computeTimelineProgress(timelineTasks, timelineTodos).pct === 100;
+  const effReadiness = useMemo(() => ({
+    timeline: isTimelineComplete,
+    charter: isCharterComplete(effCharter),
+    changeRequest: isRowsSectionComplete(effChangeRequestRows, CR_LOG_COLUMNS.map(c => c.key)),
+    stakeholder: isRowsSectionComplete(effStakeholderRows, STAKEHOLDER_COLUMNS.map(c => c.key)),
+    benefit: isRowsSectionComplete(effBenefitRows, BENEFIT_COLUMNS.map(c => c.key)),
+    dependency: isRowsSectionComplete(effDependencyRows, DEPENDENCY_COLUMNS.map(c => c.key)),
+    riskLog: isRowsSectionComplete(effRiskLogRows, RISK_LOG_COLUMNS.map(c => c.key)),
+    lessonsLearned: isRowsSectionComplete(effLessonsLearnedRows, LESSON_LEARNED_COLUMNS.map(c => c.key)),
+    document: isDocumentSectionComplete(effDocumentRows)
+  }), [isTimelineComplete, effCharter, effDocumentRows, effChangeRequestRows, effStakeholderRows, effBenefitRows, effDependencyRows, effRiskLogRows, effLessonsLearnedRows]);
   const effUpdateCharterField = useDraft ? draftUpdateCharterField : () => {};
-  const effToggleReadinessItem = useDraft ? draftToggleReadinessItem : () => {};
+  const effToggleReadinessItem = () => {};
   const effAddDocumentRow = useDraft ? draftAddDocumentRow : () => {};
   const effUpdateDocumentRow = useDraft ? draftUpdateDocumentRow : () => {};
   const effRemoveDocumentRow = useDraft ? draftRemoveDocumentRow : () => {};
 
   const commit = () => {
-    onCommitBaseline({ charter: draftCharter, readiness: draftReadiness, documentRows: draftDocumentRows });
+    onCommitBaseline({
+      charter: draftCharter,
+      readiness: {
+        timeline: isTimelineComplete,
+        charter: isCharterComplete(draftCharter),
+        changeRequest: isRowsSectionComplete(draftChangeRequestRows, CR_LOG_COLUMNS.map(c => c.key)),
+        stakeholder: isRowsSectionComplete(draftStakeholderRows, STAKEHOLDER_COLUMNS.map(c => c.key)),
+        benefit: isRowsSectionComplete(draftBenefitRows, BENEFIT_COLUMNS.map(c => c.key)),
+        dependency: isRowsSectionComplete(draftDependencyRows, DEPENDENCY_COLUMNS.map(c => c.key)),
+        riskLog: isRowsSectionComplete(draftRiskLogRows, RISK_LOG_COLUMNS.map(c => c.key)),
+        lessonsLearned: isRowsSectionComplete(draftLessonsLearnedRows, LESSON_LEARNED_COLUMNS.map(c => c.key)),
+        document: isDocumentSectionComplete(draftDocumentRows)
+      },
+      documentRows: draftDocumentRows,
+      changeRequestRows: draftChangeRequestRows, stakeholderRows: draftStakeholderRows, benefitRows: draftBenefitRows,
+      dependencyRows: draftDependencyRows, riskLogRows: draftRiskLogRows, lessonsLearnedRows: draftLessonsLearnedRows
+    });
     setDirty(false);
   };
   useEffect(() => {
     if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
-  }, [dirty, draftCharter, draftReadiness, draftDocumentRows]);
+  }, [dirty, draftCharter, draftDocumentRows, draftChangeRequestRows, draftStakeholderRows, draftBenefitRows, draftDependencyRows, draftRiskLogRows, draftLessonsLearnedRows]);
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "PMO"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Baseline documents per project: Launch Readiness Checklist, Project Charter, Stakeholder Register, Benefit Register, Risk & Dependency Log, and Documents.")
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Baseline documents per project: Launch Readiness Checklist, Project Charter, Change Request Log, Stakeholder Register, Benefit Register, Dependency Log, Risk Log, Lesson Learned, and Documents.")
       ),
       useDraft && dirty && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes")
     ),
@@ -2118,14 +2424,8 @@ function ProjectBaselineView({
       const expanded = !!expandedSections[section.key];
       if (section.key === "readiness") {
         return h("div", { key:section.key, className:"card", style:{ marginTop:16 } },
-          h("div", {
-            onClick: () => toggleSection(section.key),
-            style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
-          },
-            h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
-            h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
-          ),
-          expanded && h(LaunchReadinessChecklist, { readiness: effReadiness, onToggleItem: effToggleReadinessItem })
+          h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155", marginBottom:14 } }, section.label),
+          h(LaunchReadinessChecklist, { readiness: effReadiness, onToggleItem: effToggleReadinessItem })
         );
       }
       if (section.key === "charter") {
@@ -2150,13 +2450,167 @@ function ProjectBaselineView({
             h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
           ),
           expanded && h(DocumentsSection, {
-            rows: effDocumentRows, onAdd: effAddDocumentRow, onUpdate: effUpdateDocumentRow, onRemove: effRemoveDocumentRow, currentUser
+            rows: effDocumentRows, onAdd: effAddDocumentRow, onUpdate: effUpdateDocumentRow, onRemove: effRemoveDocumentRow, currentUser, canAdd: canAddToProject
+          })
+        );
+      }
+      const LOG_TABLE_MAP = {
+        changeRequest: { columns: CR_LOG_COLUMNS, rows: effChangeRequestRows, onAdd: useDraft ? addChangeRequestRow : () => {}, onUpdate: useDraft ? updateChangeRequestRow : () => {}, onRemove: useDraft ? removeChangeRequestRow : () => {}, showRowNumber: false },
+        stakeholder: { columns: STAKEHOLDER_COLUMNS, rows: effStakeholderRows, onAdd: useDraft ? addStakeholderRow : () => {}, onUpdate: useDraft ? updateStakeholderRow : () => {}, onRemove: useDraft ? removeStakeholderRow : () => {} },
+        benefit: { columns: BENEFIT_COLUMNS, rows: effBenefitRows, onAdd: useDraft ? addBenefitRow : () => {}, onUpdate: useDraft ? updateBenefitRow : () => {}, onRemove: useDraft ? removeBenefitRow : () => {} },
+        dependency: { columns: DEPENDENCY_COLUMNS, rows: effDependencyRows, onAdd: useDraft ? addDependencyRow : () => {}, onUpdate: useDraft ? updateDependencyRow : () => {}, onRemove: useDraft ? removeDependencyRow : () => {} },
+        riskLog: { columns: RISK_LOG_COLUMNS, rows: effRiskLogRows, onAdd: useDraft ? addRiskLogRow : () => {}, onUpdate: useDraft ? updateRiskLogRow : () => {}, onRemove: useDraft ? removeRiskLogRow : () => {} },
+        lessonsLearned: { columns: LESSON_LEARNED_COLUMNS, rows: effLessonsLearnedRows, onAdd: useDraft ? addLessonsLearnedRow : () => {}, onUpdate: useDraft ? updateLessonsLearnedRow : () => {}, onRemove: useDraft ? removeLessonsLearnedRow : () => {} },
+      };
+      const table = LOG_TABLE_MAP[section.key];
+      if (table) {
+        return h("div", { key:section.key, className:"card", style:{ marginTop:16 } },
+          h("div", {
+            onClick: () => toggleSection(section.key),
+            style: { display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer" }
+          },
+            h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155" } }, section.label),
+            h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
+          ),
+          expanded && h(EditableLogTable, {
+            columns: table.columns, rows: table.rows, onAdd: table.onAdd, onUpdate: table.onUpdate, onRemove: table.onRemove,
+            currentUser, canAdd: canAddToProject, showRowNumber: table.showRowNumber !== false
           })
         );
       }
       return h(BaselineSection, { key:section.key, section, expanded, onToggle: toggleSection });
     })
     )
+  );
+}
+
+/* =========================================================================
+   DASHBOARD REPORT
+   ========================================================================= */
+function StatCard({ label, value, sub, color }) {
+  return h("div", { className:"card", style:{ flex:"1 1 180px", minWidth:160 } },
+    h("div", { style:{ fontSize:12, color:"#64748B", fontWeight:600, marginBottom:6 } }, label),
+    h("div", { style:{ fontSize:26, fontWeight:800, color: color || "#152238" } }, value),
+    sub && h("div", { style:{ fontSize:12, color:"#94A3B8", marginTop:4 } }, sub)
+  );
+}
+
+function DashboardReportView({ projectList, records }) {
+  const todayISO = new Date().toISOString().slice(0,10);
+
+  const projectStats = useMemo(() => {
+    return (projectList || []).map(row => {
+      const key = makeKey(row.application, row.project);
+      const rec = records[key] || {};
+      const tasks = rec.tasks || [], todos = rec.todos || [];
+      const progress = computeTimelineProgress(tasks, todos);
+      let riskLabel = null;
+      if (row.endDate) {
+        const daysDiff = Math.round((new Date(row.endDate + "T00:00:00") - new Date(todayISO + "T00:00:00")) / 86400000);
+        if (daysDiff < 0 && progress.pct < 100) riskLabel = `Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? "" : "s"}`;
+        else if (daysDiff >= 0 && daysDiff <= 14 && progress.pct < 70) riskLabel = `Due in ${daysDiff} day${daysDiff === 1 ? "" : "s"} \u2014 only ${progress.pct}% done`;
+      }
+      return { row, progress, riskLabel, tasks, todos };
+    });
+  }, [projectList, records, todayISO]);
+
+  const overall = useMemo(() => {
+    const allItems = projectStats.flatMap(ps => [...ps.tasks, ...ps.todos]);
+    const counted = allItems.filter(t => norm(t.status).toLowerCase() !== "cancelled");
+    const done = counted.filter(t => norm(t.status).toLowerCase() === "done").length;
+    const total = counted.length;
+    return {
+      totalProjects: projectStats.length,
+      pct: total ? Math.round((done / total) * 100) : 0,
+      atRiskCount: projectStats.filter(ps => ps.riskLabel).length,
+      completedCount: projectStats.filter(ps => ps.progress.total > 0 && ps.progress.pct === 100).length
+    };
+  }, [projectStats]);
+
+  const streamReports = useMemo(() => {
+    const groups = {};
+    projectStats.forEach(ps => {
+      const s = norm(ps.row.stream) || "(No Stream)";
+      (groups[s] = groups[s] || []).push(ps);
+    });
+    return Object.entries(groups).map(([streamName, items]) => {
+      const allItems = items.flatMap(ps => [...ps.tasks, ...ps.todos]);
+      const counted = allItems.filter(t => norm(t.status).toLowerCase() !== "cancelled");
+      const done = counted.filter(t => norm(t.status).toLowerCase() === "done").length;
+      const inProgress = counted.filter(t => norm(t.status).toLowerCase() === "in progress").length;
+      const open = counted.filter(t => norm(t.status).toLowerCase() === "open").length;
+      const total = counted.length;
+      const cancelled = allItems.length - total;
+      const pct = pctOf => total ? Math.round((pctOf / total) * 100) : 0;
+      const phaseCounts = {};
+      items.forEach(ps => { const ph = norm(ps.row.phase) || "(No Phase)"; phaseCounts[ph] = (phaseCounts[ph] || 0) + 1; });
+      return {
+        streamName, projectCount: items.length,
+        done, inProgress, open, cancelled, total,
+        pctDone: pct(done), pctInProgress: pct(inProgress), pctOpen: pct(open),
+        overallPct: total ? Math.round((done / total) * 100) : 0,
+        phaseCounts,
+        atRisk: items.filter(ps => ps.riskLabel)
+      };
+    }).sort((a, b) => a.streamName.localeCompare(b.streamName));
+  }, [projectStats]);
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Dashboard Report"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "High-level progress overview across all streams \u2014 completion, in-progress work, and delivery risk.")
+    ),
+
+    projectStats.length === 0
+      ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "No projects yet. Add one via the \"Create Project\" menu.")
+      : h("div", null,
+          h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
+            h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
+            h(StatCard, { label:"Overall Progress", value:`${overall.pct}%`, color: overall.pct === 100 ? "#166534" : "#1E3A5F" }),
+            h(StatCard, { label:"At Risk of Delay", value:overall.atRiskCount, color: overall.atRiskCount > 0 ? "#C2410C" : "#166534", sub: overall.atRiskCount > 0 ? "Overdue or due soon with low progress" : "None right now" }),
+            h(StatCard, { label:"Completed Projects", value:overall.completedCount, color:"#166534" })
+          ),
+
+          streamReports.map(sr => h("div", { key:sr.streamName, className:"card", style:{ marginBottom:16 } },
+            h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:10 } },
+              h("div", null,
+                h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238" } }, sr.streamName),
+                h("div", { style:{ fontSize:12, color:"#64748B", marginTop:2 } }, `${sr.projectCount} project${sr.projectCount === 1 ? "" : "s"}`)
+              ),
+              h("div", { style:{ fontSize:18, fontWeight:800, color: sr.overallPct === 100 ? "#166534" : "#1E3A5F" } }, `${sr.overallPct}%`)
+            ),
+
+            h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:10 } },
+              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctDone}%`, background:"#22C55E" } }),
+              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
+              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctOpen}%`, background:"#CBD5E1" } })
+            ),
+            h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:12 } },
+              h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Done ${sr.pctDone}% (${sr.done})`),
+              h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
+              h("span", null, h("span", { style:{ color:"#94A3B8", fontWeight:700 } }, "\u25CF "), `Open ${sr.pctOpen}% (${sr.open})`),
+              sr.cancelled > 0 && h("span", null, `Cancelled: ${sr.cancelled}`)
+            ),
+
+            h("div", { style:{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 } },
+              Object.entries(sr.phaseCounts).map(([ph, cnt]) => h("span", {
+                key:ph, style:{ fontSize:11, fontWeight:600, color:"#334155", background:"#F1F5F9", borderRadius:999, padding:"3px 10px" }
+              }, `${ph}: ${cnt}`))
+            ),
+
+            h("div", { style:{ borderTop:"1px solid #F1F5F9", paddingTop:10 } },
+              h("div", { style:{ fontSize:12, fontWeight:700, color: sr.atRisk.length > 0 ? "#C2410C" : "#166534", marginBottom: sr.atRisk.length > 0 ? 6 : 0 } },
+                sr.atRisk.length > 0 ? `\u26A0 ${sr.atRisk.length} project${sr.atRisk.length === 1 ? "" : "s"} at risk of delay` : "\u2713 No projects at risk"
+              ),
+              sr.atRisk.length > 0 && h("div", { style:{ display:"flex", flexDirection:"column", gap:5 } },
+                sr.atRisk.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
+                  h("span", null, `${ps.row.project || "\u2014"} `, h("span", { style:{ color:"#94A3B8" } }, `(${ps.row.application || "\u2014"})`)),
+                  h("span", { style:{ color:"#C2410C", fontWeight:600 } }, ps.riskLabel)
+                ))
+              )
+            )
+          ))
+        )
   );
 }
 
@@ -2237,10 +2691,14 @@ function AppRoot() {
   };
 
   const baselineKey = useMemo(() => makeKey(baselineApplicationText, baselineProjectText), [baselineApplicationText, baselineProjectText]);
-  const baselineRecord = baselineRecords[baselineKey] || { readiness:{}, charter:{}, benefit:{}, documentRows:[] };
+  const DEFAULT_BASELINE_RECORD = {
+    readiness:{}, charter:{}, documentRows:[], changeRequestRows:[], stakeholderRows:[],
+    benefitRows:[], dependencyRows:[], riskLogRows:[], lessonsLearnedRows:[]
+  };
+  const baselineRecord = baselineRecords[baselineKey] || DEFAULT_BASELINE_RECORD;
   const updateBaselineRecord = updater => {
     setBaselineRecords(prev => {
-      const cur = prev[baselineKey] || { readiness:{}, charter:{}, benefit:{}, documentRows:[] };
+      const cur = prev[baselineKey] || DEFAULT_BASELINE_RECORD;
       const next = updater(cur);
       return { ...prev, [baselineKey]: { ...next, application: baselineApplicationText, project: baselineProjectText } };
     });
@@ -2351,6 +2809,7 @@ function AppRoot() {
 
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
+  const onUpdateProjectRow = (id, field, value) => setProjectList(list => list.map(r => r.id === id ? { ...r, [field]: value } : r));
   const onImportProjectRows = rows => setProjectList(list => [
     ...list, ...rows.map(r => ({ ...r, createdBy: currentUser ? currentUser.email : "" }))
   ]);
@@ -2459,11 +2918,18 @@ function AppRoot() {
     onSaveProjectFields, phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
     subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel
   };
+  const baselineTimelineKey = useMemo(() => makeKey(baselineApplicationText, baselineProjectText), [baselineApplicationText, baselineProjectText]);
+  const baselineTimelineRecord = records[baselineTimelineKey] || { tasks:[], todos:[] };
   const projectBaselineViewProps = {
     applicationText: baselineApplicationText, projectText: baselineProjectText,
     onApplicationChange: setBaselineApplicationText, onProjectChange: setBaselineProjectText,
     projectList, charter: baselineRecord.charter, readiness: baselineRecord.readiness,
-    documentRows: baselineRecord.documentRows, onCommitBaseline, currentUser
+    documentRows: baselineRecord.documentRows,
+    changeRequestRows: baselineRecord.changeRequestRows, stakeholderRows: baselineRecord.stakeholderRows,
+    benefitRows: baselineRecord.benefitRows, dependencyRows: baselineRecord.dependencyRows,
+    riskLogRows: baselineRecord.riskLogRows, lessonsLearnedRows: baselineRecord.lessonsLearnedRows,
+    timelineTasks: baselineTimelineRecord.tasks, timelineTodos: baselineTimelineRecord.todos,
+    onCommitBaseline, currentUser
   };
   const changeManagementViewProps = {
     applicationText: cmApplicationText, projectText: cmProjectText,
@@ -2487,7 +2953,9 @@ function AppRoot() {
     }),
     h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout }),
     h("div", { style:{ flex:1, minWidth:0 } },
-      activeView === "create-project"
+      activeView === "dashboard-report"
+        ? h(DashboardReportView, { projectList: sortedProjectList, records })
+        : activeView === "create-project"
         ? h(CreateProjectView, {
             form: createProjectForm, onFieldChange: onCreateProjectFieldChange, onSubmit: onSubmitCreateProject,
             phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream, subStreamOptions: masterData.subStream,
@@ -2495,7 +2963,7 @@ function AppRoot() {
           })
         : activeView === "list"
         ? h(ProjectListView, {
-            projectList: sortedProjectList, onRemove: onRemoveProjectRow,
+            projectList: sortedProjectList, onUpdate: onUpdateProjectRow, onRemove: onRemoveProjectRow,
             sortConfig: plSortConfig, onSort: onPlSort, onImport: onImportProjectRows, onExport: onExportProjectList,
             phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
             subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel,
