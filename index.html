@@ -66,6 +66,7 @@ const SUPABASE_COLUMN_MAP = {
   changeManagementRecords: "change_management_records",
   masterData: "master_data",
   userManagement: "user_management",
+  weeklyReports: "weekly_reports",
 };
 
 async function fetchRemoteState() {
@@ -1020,7 +1021,9 @@ function UpdateLog({ entries, onSubmit, onDelete }) {
       : h("div", { style:{ display:"flex", flexDirection:"column", gap:11, maxHeight:320, overflow:"auto" } },
           sorted.map(entry => h("div", { key:entry.id, style:{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, borderLeft:"3px solid #4F9D9D", paddingLeft:11 } },
             h("div", { style:{ flex:1 } },
-              h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:2 } }, fmt(entry.date)),
+              h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:2 } },
+                fmt(entry.date), entry.createdBy ? ` \u00B7 ${entry.createdBy}` : ""
+              ),
               h("div", { style:{ fontSize:13, color:"#334155", whiteSpace:"pre-wrap" } }, entry.text)
             ),
             h("button", { onClick:()=>onDelete(entry.id), title:"Delete update", style:{ color:"#DC2626", flexShrink:0, padding:2, background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
@@ -1317,6 +1320,7 @@ function DetailView({
    ========================================================================= */
 const NAV_ITEMS = [
   { key:"dashboard-report", label:"Dashboard Report", icon:Icon.chart },
+  { key:"weekly-report", label:"Weekly Report", icon:Icon.checklist },
   { key:"create-project", label:"Create Project", icon:Icon.plus },
   { key:"list", label:"Project List", icon:Icon.grid },
   { key:"document", label:"View Documents", icon:Icon.file, children:[
@@ -1426,7 +1430,7 @@ function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChan
 function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser, onLogout }) {
   const visibleNavItems = (currentUser && currentUser.role === "superAdmin")
     ? NAV_ITEMS
-    : NAV_ITEMS.filter(it => it.key === "dashboard-report" || it.key === "create-project" || it.key === "list");
+    : NAV_ITEMS.filter(it => it.key === "dashboard-report" || it.key === "weekly-report" || it.key === "create-project" || it.key === "list");
   const activeGroup = visibleNavItems.find(it => it.children && it.children.some(c => c.key === active));
   const [expandedGroups, setExpandedGroups] = useState({ document: true });
   const toggleGroup = key => setExpandedGroups(g => ({ ...g, [key]: !g[key] }));
@@ -2495,8 +2499,109 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
-function DashboardReportView({ projectList, records }) {
+/* A project counts as "completed" once its Phase is 6 (Hypercare), 60
+   (Closing), 61 (Cancelled), or 62 (Hold) — matched by the leading number
+   in the Phase value (e.g. "60 - Closing" -> "60"). */
+const COMPLETED_PHASE_CODES = ["6", "60", "61", "62"];
+function isCompletedPhase(phaseValue) {
+  const m = norm(phaseValue).match(/^(\d+)/);
+  return !!(m && COMPLETED_PHASE_CODES.includes(m[1]));
+}
+
+/* =========================================================================
+   WEEKLY REPORT — snapshot diffing + AI analysis
+   ========================================================================= */
+const SNAPSHOT_FIELDS = ["project", "application", "phase", "priority", "startDate", "endDate", "tpo", "deliveryLead", "resource"];
+
+/* A lightweight per-project fingerprint used to detect changes between two
+   report generations — not a full field-by-field audit, just enough to
+   say "this project changed" and roughly what moved. */
+function buildProjectSnapshot(row, records) {
+  const key = makeKey(row.application, row.project);
+  const rec = records[key] || {};
+  const tasks = rec.tasks || [], todos = rec.todos || [];
+  const snap = { id: row.id };
+  SNAPSHOT_FIELDS.forEach(f => { snap[f] = row[f] || ""; });
+  snap.taskCount = tasks.length;
+  snap.todoCount = todos.length;
+  snap.doneTaskCount = tasks.filter(t => norm(t.status).toLowerCase() === "done").length;
+  snap.doneTodoCount = todos.filter(t => norm(t.status).toLowerCase() === "done").length;
+  return snap;
+}
+
+function describeSnapshotChanges(prev, curr) {
+  const changes = [];
+  SNAPSHOT_FIELDS.forEach(f => { if (String(prev[f] || "") !== String(curr[f] || "")) changes.push(`${f}: "${prev[f] || "-"}" \u2192 "${curr[f] || "-"}"`); });
+  if (prev.taskCount !== curr.taskCount) changes.push(`task count: ${prev.taskCount} \u2192 ${curr.taskCount}`);
+  if (prev.todoCount !== curr.todoCount) changes.push(`to-do count: ${prev.todoCount} \u2192 ${curr.todoCount}`);
+  if (prev.doneTaskCount !== curr.doneTaskCount) changes.push(`tasks done: ${prev.doneTaskCount} \u2192 ${curr.doneTaskCount}`);
+  if (prev.doneTodoCount !== curr.doneTodoCount) changes.push(`to-dos done: ${prev.doneTodoCount} \u2192 ${curr.doneTodoCount}`);
+  return changes;
+}
+
+/* Compares this generation's snapshots for a stream against the last
+   saved snapshot for that same stream (from the previous weekly report,
+   if any) and returns what was added, updated, and deleted. */
+function diffStreamSnapshots(prevSnapshots, currSnapshots) {
+  const prevById = new Map((prevSnapshots || []).map(s => [s.id, s]));
+  const currById = new Map(currSnapshots.map(s => [s.id, s]));
+  const added = currSnapshots.filter(s => !prevById.has(s.id));
+  const deleted = (prevSnapshots || []).filter(s => !currById.has(s.id));
+  const updated = currSnapshots
+    .filter(s => prevById.has(s.id) && JSON.stringify(prevById.get(s.id)) !== JSON.stringify(s))
+    .map(s => ({ snapshot: s, changes: describeSnapshotChanges(prevById.get(s.id), s) }));
+  return { added, deleted, updated };
+}
+
+/* Asks Claude (via the Anthropic API, no key needed — handled by the
+   platform) to turn a stream's raw diff + current risk data into a short
+   narrative: what changed, and what needs unlocking/escalation vs. what's
+   worth highlighting as a win or notable shift. */
+async function generateStreamAiAnalysis(streamName, diff, riskContext) {
+  const fallback = {
+    summary: `${diff.added.length} project(s) added, ${diff.updated.length} updated, ${diff.deleted.length} removed since the last report.`,
+    needsAttention: riskContext.delayedProjectNames.length ? riskContext.delayedProjectNames.map(n => `${n} is overdue and not yet closed.`) : [],
+    highlights: []
+  };
+  try {
+    const promptLines = [
+      `Stream: ${streamName}`,
+      `Added projects (${diff.added.length}): ${diff.added.map(s => s.project).join(", ") || "none"}`,
+      `Deleted projects (${diff.deleted.length}): ${diff.deleted.map(s => s.project).join(", ") || "none"}`,
+      `Updated projects (${diff.updated.length}):`,
+      ...diff.updated.map(u => `  - ${u.snapshot.project}: ${u.changes.join("; ") || "minor change"}`),
+      `Currently delayed projects: ${riskContext.delayedProjectNames.join(", ") || "none"}`,
+      `Currently delayed tasks/to-dos: ${riskContext.delayedTaskCount}`,
+      `Projects by phase right now: completed ${riskContext.completed}, in progress ${riskContext.inProgress}, upcoming kick-off ${riskContext.upcoming}, exploration ${riskContext.exploration}`
+    ];
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 700,
+        system: "You are a delivery-management assistant writing a concise weekly status analysis for one delivery stream. Respond ONLY with a single valid JSON object, no markdown fences, no preamble, matching exactly this shape: {\"summary\": string, \"needsAttention\": string[], \"highlights\": string[]}. \"summary\" is 2-4 sentences on what changed this period. \"needsAttention\" lists short, specific items that need to be unlocked, escalated, or decided on (blockers, overdue items, stalled projects) — empty array if none. \"highlights\" lists short, specific notable wins or important shifts worth calling out — empty array if none. Keep every bullet under 20 words.",
+        messages: [{ role: "user", content: promptLines.join("\n") }]
+      })
+    });
+    const data = await response.json();
+    const text = (data.content || []).map(c => c.text || "").join("");
+    const clean = text.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(clean);
+    return {
+      summary: parsed.summary || fallback.summary,
+      needsAttention: Array.isArray(parsed.needsAttention) ? parsed.needsAttention : fallback.needsAttention,
+      highlights: Array.isArray(parsed.highlights) ? parsed.highlights : fallback.highlights
+    };
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function DashboardReportView({ projectList, records, currentUser, weeklyReports, onSaveWeeklyReports }) {
   const todayISO = new Date().toISOString().slice(0,10);
+  const [generating, setGenerating] = useState(false);
+  const canGenerate = !!(currentUser && currentUser.role === "superAdmin");
 
   const projectStats = useMemo(() => {
     return (projectList || []).map(row => {
@@ -2504,26 +2609,26 @@ function DashboardReportView({ projectList, records }) {
       const rec = records[key] || {};
       const tasks = rec.tasks || [], todos = rec.todos || [];
       const progress = computeTimelineProgress(tasks, todos);
+      const completed = isCompletedPhase(row.phase);
       let riskLabel = null;
-      if (row.endDate) {
+      if (row.endDate && !completed) {
         const daysDiff = Math.round((new Date(row.endDate + "T00:00:00") - new Date(todayISO + "T00:00:00")) / 86400000);
-        if (daysDiff < 0 && progress.pct < 100) riskLabel = `Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? "" : "s"}`;
-        else if (daysDiff >= 0 && daysDiff <= 14 && progress.pct < 70) riskLabel = `Due in ${daysDiff} day${daysDiff === 1 ? "" : "s"} \u2014 only ${progress.pct}% done`;
+        if (daysDiff < 0) riskLabel = `Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? "" : "s"}`;
       }
-      return { row, progress, riskLabel, tasks, todos };
+      return { row, progress, completed, riskLabel, tasks, todos };
     });
   }, [projectList, records, todayISO]);
 
   const overall = useMemo(() => {
-    const allItems = projectStats.flatMap(ps => [...ps.tasks, ...ps.todos]);
-    const counted = allItems.filter(t => norm(t.status).toLowerCase() !== "cancelled");
-    const done = counted.filter(t => norm(t.status).toLowerCase() === "done").length;
-    const total = counted.length;
+    const totalProjects = projectStats.length;
+    const completedCount = projectStats.filter(ps => ps.completed).length;
+    const completedPct = totalProjects ? Math.round((completedCount / totalProjects) * 100) : 0;
     return {
-      totalProjects: projectStats.length,
-      pct: total ? Math.round((done / total) * 100) : 0,
-      atRiskCount: projectStats.filter(ps => ps.riskLabel).length,
-      completedCount: projectStats.filter(ps => ps.progress.total > 0 && ps.progress.pct === 100).length
+      totalProjects,
+      pct: completedPct,
+      delayedCount: projectStats.filter(ps => ps.riskLabel).length,
+      completedCount,
+      completedPct
     };
   }, [projectStats]);
 
@@ -2533,32 +2638,83 @@ function DashboardReportView({ projectList, records }) {
       const s = norm(ps.row.stream) || "(No Stream)";
       (groups[s] = groups[s] || []).push(ps);
     });
+    const phaseCode = ps => { const m = norm(ps.row.phase).match(/^(\d+)/); return m ? m[1] : null; };
+    const isDelayedItem = (item, dateField) => {
+      const d = item[dateField];
+      if (!d || d >= todayISO) return false;
+      const st = norm(item.status).toLowerCase();
+      return st !== "done" && st !== "cancelled";
+    };
     return Object.entries(groups).map(([streamName, items]) => {
-      const allItems = items.flatMap(ps => [...ps.tasks, ...ps.todos]);
-      const counted = allItems.filter(t => norm(t.status).toLowerCase() !== "cancelled");
-      const done = counted.filter(t => norm(t.status).toLowerCase() === "done").length;
-      const inProgress = counted.filter(t => norm(t.status).toLowerCase() === "in progress").length;
-      const open = counted.filter(t => norm(t.status).toLowerCase() === "open").length;
-      const total = counted.length;
-      const cancelled = allItems.length - total;
-      const pct = pctOf => total ? Math.round((pctOf / total) * 100) : 0;
-      const phaseCounts = {};
-      items.forEach(ps => { const ph = norm(ps.row.phase) || "(No Phase)"; phaseCounts[ph] = (phaseCounts[ph] || 0) + 1; });
+      const total = items.length;
+      const completed = items.filter(ps => isCompletedPhase(ps.row.phase)).length;
+      const inProgress = items.filter(ps => ["3","4","5"].includes(phaseCode(ps))).length;
+      const upcoming = items.filter(ps => ["1","2"].includes(phaseCode(ps))).length;
+      const exploration = items.filter(ps => phaseCode(ps) === "0").length;
+      const pct = n => total ? Math.round((n / total) * 100) : 0;
+      const isDoneItem = t => norm(t.status).toLowerCase() === "done";
+      const delayedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(t => isDelayedItem(t, "endDate")).length, 0)
+        + items.reduce((sum, ps) => sum + ps.todos.filter(t => isDelayedItem(t, "dueDate")).length, 0);
+      const completedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(isDoneItem).length, 0)
+        + items.reduce((sum, ps) => sum + ps.todos.filter(isDoneItem).length, 0);
       return {
-        streamName, projectCount: items.length,
-        done, inProgress, open, cancelled, total,
-        pctDone: pct(done), pctInProgress: pct(inProgress), pctOpen: pct(open),
-        overallPct: total ? Math.round((done / total) * 100) : 0,
-        phaseCounts,
-        atRisk: items.filter(ps => ps.riskLabel)
+        streamName, projectCount: total,
+        completed, inProgress, upcoming, exploration, total,
+        pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
+        overallPct: pct(completed),
+        atRisk: items.filter(ps => ps.riskLabel),
+        delayedTaskCount, completedTaskCount
       };
     }).sort((a, b) => a.streamName.localeCompare(b.streamName));
-  }, [projectStats]);
+  }, [projectStats, todayISO]);
+
+  const handleGenerateReport = async () => {
+    if (generating || streamReports.length === 0) return;
+    setGenerating(true);
+    try {
+      const generatedDate = new Date().toISOString().slice(0,10);
+      const newReports = [];
+      for (const sr of streamReports) {
+        const items = projectStats.filter(ps => (norm(ps.row.stream) || "(No Stream)") === sr.streamName);
+        const currSnapshots = items.map(ps => buildProjectSnapshot(ps.row, records));
+        const prevForStream = weeklyReports
+          .filter(r => r.stream === sr.streamName)
+          .sort((a, b) => b.generatedDate.localeCompare(a.generatedDate));
+        const prevSnapshots = prevForStream.length ? prevForStream[0].snapshots : [];
+        const diff = diffStreamSnapshots(prevSnapshots, currSnapshots);
+        const riskContext = {
+          delayedProjectNames: sr.atRisk.map(ps => ps.row.project || "Untitled"),
+          delayedTaskCount: sr.delayedTaskCount,
+          completed: sr.completed, inProgress: sr.inProgress, upcoming: sr.upcoming, exploration: sr.exploration
+        };
+        const aiAnalysis = await generateStreamAiAnalysis(sr.streamName, diff, riskContext);
+        newReports.push({
+          id: uid(), generatedDate, stream: sr.streamName, generatedBy: currentUser ? currentUser.email : "",
+          diffSummary: {
+            addedCount: diff.added.length, updatedCount: diff.updated.length, deletedCount: diff.deleted.length,
+            added: diff.added.map(s => s.project || "Untitled"),
+            deleted: diff.deleted.map(s => s.project || "Untitled"),
+            updated: diff.updated.map(u => ({ project: u.snapshot.project || "Untitled", changes: u.changes }))
+          },
+          aiAnalysis,
+          snapshots: currSnapshots
+        });
+      }
+      onSaveWeeklyReports(newReports);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Dashboard Report"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "High-level progress overview across all streams \u2014 completion, in-progress work, and delivery risk.")
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Dashboard Report"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "High-level progress overview across all streams \u2014 completion, in-progress work, and delivery risk.")
+      ),
+      canGenerate && h("button", {
+        className:"btn btn-primary", onClick:handleGenerateReport, disabled:generating || projectStats.length === 0
+      }, generating ? "Generating\u2026" : "Generate Report")
     ),
 
     projectStats.length === 0
@@ -2566,9 +2722,9 @@ function DashboardReportView({ projectList, records }) {
       : h("div", null,
           h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
             h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
-            h(StatCard, { label:"Overall Progress", value:`${overall.pct}%`, color: overall.pct === 100 ? "#166534" : "#1E3A5F" }),
-            h(StatCard, { label:"At Risk of Delay", value:overall.atRiskCount, color: overall.atRiskCount > 0 ? "#C2410C" : "#166534", sub: overall.atRiskCount > 0 ? "Overdue or due soon with low progress" : "None right now" }),
-            h(StatCard, { label:"Completed Projects", value:overall.completedCount, color:"#166534" })
+            h(StatCard, { label:"Overall Progress", value:`${overall.pct}%`, color: overall.pct === 100 ? "#166534" : "#1E3A5F", sub:"% of projects at Phase 6/60/61/62" }),
+            h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61/62" : "None right now" }),
+            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:"% of projects at Phase 6/60/61/62" })
           ),
 
           streamReports.map(sr => h("div", { key:sr.streamName, className:"card", style:{ marginBottom:16 } },
@@ -2581,26 +2737,26 @@ function DashboardReportView({ projectList, records }) {
             ),
 
             h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:10 } },
-              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctDone}%`, background:"#22C55E" } }),
+              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
               sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
-              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctOpen}%`, background:"#CBD5E1" } })
+              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctUpcoming}%`, background:"#60A5FA" } }),
+              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctExploration}%`, background:"#CBD5E1" } })
             ),
             h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:12 } },
-              h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Done ${sr.pctDone}% (${sr.done})`),
+              h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed Projects ${sr.pctCompleted}% (${sr.completed})`),
               h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
-              h("span", null, h("span", { style:{ color:"#94A3B8", fontWeight:700 } }, "\u25CF "), `Open ${sr.pctOpen}% (${sr.open})`),
-              sr.cancelled > 0 && h("span", null, `Cancelled: ${sr.cancelled}`)
+              h("span", null, h("span", { style:{ color:"#60A5FA", fontWeight:700 } }, "\u25CF "), `Upcoming Kick Off ${sr.pctUpcoming}% (${sr.upcoming})`),
+              h("span", null, h("span", { style:{ color:"#94A3B8", fontWeight:700 } }, "\u25CF "), `Exploration ${sr.pctExploration}% (${sr.exploration})`)
             ),
 
-            h("div", { style:{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 } },
-              Object.entries(sr.phaseCounts).map(([ph, cnt]) => h("span", {
-                key:ph, style:{ fontSize:11, fontWeight:600, color:"#334155", background:"#F1F5F9", borderRadius:999, padding:"3px 10px" }
-              }, `${ph}: ${cnt}`))
+            h("div", { style:{ display:"flex", flexWrap:"wrap", gap:16, marginBottom:12, fontSize:12 } },
+              h("span", { style:{ color:"#166534", fontWeight:600 } }, `Completed Tasks: ${sr.completedTaskCount}`),
+              h("span", { style:{ color: sr.delayedTaskCount > 0 ? "#C2410C" : "#64748B", fontWeight:600 } }, `Delayed Tasks: ${sr.delayedTaskCount}`)
             ),
 
             h("div", { style:{ borderTop:"1px solid #F1F5F9", paddingTop:10 } },
               h("div", { style:{ fontSize:12, fontWeight:700, color: sr.atRisk.length > 0 ? "#C2410C" : "#166534", marginBottom: sr.atRisk.length > 0 ? 6 : 0 } },
-                sr.atRisk.length > 0 ? `\u26A0 ${sr.atRisk.length} project${sr.atRisk.length === 1 ? "" : "s"} at risk of delay` : "\u2713 No projects at risk"
+                sr.atRisk.length > 0 ? `\u26A0 ${sr.atRisk.length} project${sr.atRisk.length === 1 ? "" : "s"} delayed` : "\u2713 No delayed projects"
               ),
               sr.atRisk.length > 0 && h("div", { style:{ display:"flex", flexDirection:"column", gap:5 } },
                 sr.atRisk.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
@@ -2611,6 +2767,101 @@ function DashboardReportView({ projectList, records }) {
             )
           ))
         )
+  );
+}
+
+/* =========================================================================
+   WEEKLY REPORT
+   ========================================================================= */
+function WeeklyReportDetailModal({ report, onClose }) {
+  if (!report) return null;
+  const s = report.diffSummary || { addedCount:0, updatedCount:0, deletedCount:0, added:[], deleted:[], updated:[] };
+  const ai = report.aiAnalysis || { summary:"", needsAttention:[], highlights:[] };
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onClose
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, padding:24, maxWidth:600, width:"100%", maxHeight:"85vh", overflow:"auto", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:10, marginBottom:4 } },
+        h("div", null,
+          h("div", { style:{ fontSize:17, fontWeight:800, color:"#152238" } }, report.stream),
+          h("div", { style:{ fontSize:12, color:"#64748B", marginTop:2 } }, `Generated ${report.generatedDate}${report.generatedBy ? ` \u00B7 ${report.generatedBy}` : ""}`)
+        ),
+        h("button", { onClick:onClose, style:{ background:"none", border:"none", color:"#94A3B8", cursor:"pointer", display:"flex", fontSize:16 } }, h(Icon.x,{}))
+      ),
+
+      h("div", { style:{ marginTop:18, paddingTop:16, borderTop:"1px solid #F1F5F9" } },
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#334155", marginBottom:8 } }, "Summary of Changes"),
+        h("div", { style:{ display:"flex", gap:16, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:10 } },
+          h("span", null, h("span", { style:{ color:"#166534", fontWeight:700 } }, s.addedCount), " added"),
+          h("span", null, h("span", { style:{ color:"#1E3A5F", fontWeight:700 } }, s.updatedCount), " updated"),
+          h("span", null, h("span", { style:{ color:"#DC2626", fontWeight:700 } }, s.deletedCount), " deleted")
+        ),
+        s.added.length > 0 && h("div", { style:{ fontSize:12, color:"#334155", marginBottom:6 } }, h("b", null, "Added: "), s.added.join(", ")),
+        s.deleted.length > 0 && h("div", { style:{ fontSize:12, color:"#334155", marginBottom:6 } }, h("b", null, "Deleted: "), s.deleted.join(", ")),
+        s.updated.length > 0 && h("div", { style:{ fontSize:12, color:"#334155" } },
+          h("b", null, "Updated:"),
+          h("div", { style:{ display:"flex", flexDirection:"column", gap:4, marginTop:4 } },
+            s.updated.map((u, i) => h("div", { key:i }, `\u2022 ${u.project}${u.changes && u.changes.length ? ` \u2014 ${u.changes.join("; ")}` : ""}`))
+          )
+        ),
+        s.addedCount === 0 && s.updatedCount === 0 && s.deletedCount === 0 && h("div", { style:{ fontSize:12, color:"#94A3B8" } }, "No changes detected since the previous report for this stream.")
+      ),
+
+      h("div", { style:{ marginTop:18, paddingTop:16, borderTop:"1px solid #F1F5F9" } },
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#334155", marginBottom:6 } }, "AI Analysis"),
+        ai.summary && h("div", { style:{ fontSize:13, color:"#334155", marginBottom:12, lineHeight:1.5 } }, ai.summary),
+        h("div", { style:{ fontSize:12, fontWeight:700, color:"#C2410C", marginBottom:5 } }, "Needs Attention / Unlock"),
+        (ai.needsAttention && ai.needsAttention.length > 0)
+          ? h("ul", { style:{ margin:"0 0 12px", paddingLeft:18, fontSize:12, color:"#334155", display:"flex", flexDirection:"column", gap:3 } },
+              ai.needsAttention.map((t, i) => h("li", { key:i }, t)))
+          : h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:12 } }, "Nothing flagged."),
+        h("div", { style:{ fontSize:12, fontWeight:700, color:"#166534", marginBottom:5 } }, "Highlights"),
+        (ai.highlights && ai.highlights.length > 0)
+          ? h("ul", { style:{ margin:0, paddingLeft:18, fontSize:12, color:"#334155", display:"flex", flexDirection:"column", gap:3 } },
+              ai.highlights.map((t, i) => h("li", { key:i }, t)))
+          : h("div", { style:{ fontSize:12, color:"#94A3B8" } }, "Nothing flagged.")
+      )
+    )
+  );
+}
+
+function WeeklyReportView({ weeklyReports }) {
+  const [selected, setSelected] = useState(null);
+  const sorted = useMemo(() => [...(weeklyReports || [])].sort((a, b) => b.generatedDate.localeCompare(a.generatedDate)), [weeklyReports]);
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Weekly Report"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "History of generated reports per stream. Click a row to see what changed and what needs attention.")
+    ),
+
+    h(WeeklyReportDetailModal, { report: selected, onClose: () => setSelected(null) }),
+
+    h("div", { className:"card", style:{ padding:16 } },
+      sorted.length === 0
+        ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No reports generated yet. Use "Generate Report" on the Dashboard Report page.')
+        : h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
+            h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+              h("thead", null, h("tr", { style:{ background:"#152238" } },
+                h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Generated Date"),
+                h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Stream")
+              )),
+              h("tbody", null,
+                sorted.map((r, i) => h("tr", {
+                  key:r.id, onClick:() => setSelected(r),
+                  style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC", cursor:"pointer" }
+                },
+                  h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#334155" } }, r.generatedDate),
+                  h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#1E3A5F", fontWeight:600 } }, r.stream)
+                ))
+              )
+            )
+          )
+    )
   );
 }
 
@@ -2625,6 +2876,7 @@ function AppRoot() {
   const [baselineRecords, setBaselineRecords] = useState(stored.baselineRecords || {});
   const [masterData, setMasterData] = useState({ ...DEFAULT_MASTER_DATA, ...(stored.masterData || {}) });
   const [userManagement, setUserManagement] = useState(stored.userManagement || DEFAULT_USER_MANAGEMENT);
+  const [weeklyReports, setWeeklyReports] = useState(stored.weeklyReports || []);
   const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient);
   const remoteHydrated = useRef(false);
   const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
@@ -2664,6 +2916,7 @@ function AppRoot() {
         if (remote.changeManagementRecords !== undefined) setChangeManagementRecords(remote.changeManagementRecords);
         if (remote.masterData !== undefined) setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
         if (remote.userManagement !== undefined) setUserManagement(remote.userManagement);
+        if (remote.weeklyReports !== undefined) setWeeklyReports(remote.weeklyReports);
       }
       remoteHydrated.current = true;
       setRemoteLoading(false);
@@ -2675,6 +2928,7 @@ function AppRoot() {
       if (remote.changeManagementRecords !== undefined) setChangeManagementRecords(remote.changeManagementRecords);
       if (remote.masterData !== undefined) setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
       if (remote.userManagement !== undefined) setUserManagement(remote.userManagement);
+      if (remote.weeklyReports !== undefined) setWeeklyReports(remote.weeklyReports);
     });
     return () => { cancelled = true; unsubscribe(); };
   }, []);
@@ -2786,6 +3040,7 @@ function AppRoot() {
     return { ok:true };
   };
   const onLogout = () => setCurrentUser(null);
+  const onSaveWeeklyReports = newReports => setWeeklyReports(list => [...list, ...newReports]);
 
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; return; }
@@ -2794,6 +3049,7 @@ function AppRoot() {
       const ok = saveState({
         currentUser,
         activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, sidebarCollapsed,
+        weeklyReports,
         lastApplication: applicationText, lastProject: projectText,
         lastBaselineApplication: baselineApplicationText, lastBaselineProject: baselineProjectText,
         lastCmApplication: cmApplicationText, lastCmProject: cmProjectText,
@@ -2801,11 +3057,11 @@ function AppRoot() {
       });
       setSaveStatus(ok ? "saved" : "error");
       if (supabaseClient && remoteHydrated.current) {
-        pushRemoteState({ projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement });
+        pushRemoteState({ projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports });
       }
     }, 400);
     return () => clearTimeout(t);
-  }, [currentUser, activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, sidebarCollapsed, applicationText, projectText, baselineApplicationText, baselineProjectText, cmApplicationText, cmProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden]);
+  }, [currentUser, activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, weeklyReports, sidebarCollapsed, applicationText, projectText, baselineApplicationText, baselineProjectText, cmApplicationText, cmProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden]);
 
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
@@ -2870,7 +3126,7 @@ function AppRoot() {
   const onSubmitUpdate = text => {
     const v = (text || "").trim();
     if (!v) return;
-    updateRecord(cur => ({ ...cur, updates: [...(cur.updates || []), { id: uid(), text: v, date: new Date().toISOString() }] }));
+    updateRecord(cur => ({ ...cur, updates: [...(cur.updates || []), { id: uid(), text: v, date: new Date().toISOString(), createdBy: currentUser ? currentUser.email : "" }] }));
   };
   const onDeleteUpdate = entryId => updateRecord(cur => ({ ...cur, updates: (cur.updates || []).filter(e => e.id !== entryId) }));
 
@@ -2954,7 +3210,9 @@ function AppRoot() {
     h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout }),
     h("div", { style:{ flex:1, minWidth:0 } },
       activeView === "dashboard-report"
-        ? h(DashboardReportView, { projectList: sortedProjectList, records })
+        ? h(DashboardReportView, { projectList: sortedProjectList, records, currentUser, weeklyReports, onSaveWeeklyReports })
+        : activeView === "weekly-report"
+        ? h(WeeklyReportView, { weeklyReports })
         : activeView === "create-project"
         ? h(CreateProjectView, {
             form: createProjectForm, onFieldChange: onCreateProjectFieldChange, onSubmit: onSubmitCreateProject,
