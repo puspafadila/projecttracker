@@ -1412,20 +1412,40 @@ function MasterDataSection({ category, expanded, onToggle, items, onAdd, onUpdat
   );
 }
 
-function MasterDataManagementView({ masterData, onAddItem, onUpdateItem, onRemoveItem, readOnly }) {
+function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
   const [expandedSections, setExpandedSections] = useState({});
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
+  const [draft, setDraft] = useState(masterData);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (!dirty) setDraft(masterData); }, [masterData]);
+
+  const onAddItem = catKey => { setDraft(d => ({ ...d, [catKey]: [...((d && d[catKey]) || []), ""] })); setDirty(true); };
+  const onUpdateItem = (catKey, idx, value) => {
+    setDraft(d => ({ ...d, [catKey]: ((d && d[catKey]) || []).map((v,i) => i===idx ? value : v) }));
+    setDirty(true);
+  };
+  const onRemoveItem = (catKey, idx) => {
+    setDraft(d => ({ ...d, [catKey]: ((d && d[catKey]) || []).filter((_,i) => i!==idx) }));
+    setDirty(true);
+  };
+  const handleSave = () => { onSaveAll(draft); setDirty(false); };
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Master Data Management"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar master data yang digunakan di seluruh aplikasi: Phase, Mountain, Stream & Sub-Stream, Applications, dan Delivery Model.")
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Master Data Management"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar master data yang digunakan di seluruh aplikasi: Phase, Mountain, Stream & Sub-Stream, Applications, dan Delivery Model.")
+      ),
+      !readOnly && h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "Ada perubahan belum disimpan"),
+        h("button", { className:"btn btn-primary", onClick:handleSave, disabled:!dirty }, "Save")
+      )
     ),
     readOnly && h(ReadOnlyBanner),
     h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
       MASTER_DATA_CATEGORIES.map(cat => h(MasterDataSection, {
         key: cat.key, category: cat, expanded: !!expandedSections[cat.key], onToggle: toggleSection,
-        items: (masterData && masterData[cat.key]) || [],
+        items: (draft && draft[cat.key]) || [],
         onAdd: onAddItem, onUpdate: onUpdateItem, onRemove: onRemoveItem
       }))
     )
@@ -1525,20 +1545,40 @@ function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, on
   );
 }
 
-function UserManagementView({ userManagement, onAddEmail, onUpdateEmail, onRemoveEmail, readOnly }) {
+function UserManagementView({ userManagement, onSaveAll, readOnly }) {
   const [expandedSections, setExpandedSections] = useState({});
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
+  const [draft, setDraft] = useState(userManagement);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (!dirty) setDraft(userManagement); }, [userManagement]);
+
+  const onAddEmail = roleKey => { setDraft(d => ({ ...d, [roleKey]: [...((d && d[roleKey]) || []), ""] })); setDirty(true); };
+  const onUpdateEmail = (roleKey, idx, value) => {
+    setDraft(d => ({ ...d, [roleKey]: ((d && d[roleKey]) || []).map((v,i) => i===idx ? value : v) }));
+    setDirty(true);
+  };
+  const onRemoveEmail = (roleKey, idx) => {
+    setDraft(d => ({ ...d, [roleKey]: ((d && d[roleKey]) || []).filter((_,i) => i!==idx) }));
+    setDirty(true);
+  };
+  const handleSave = () => { onSaveAll(draft); setDirty(false); };
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "User Management"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar email pengguna untuk setiap role: Super Admin, TPO, PMO, BPO, dan View Only.")
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "User Management"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar email pengguna untuk setiap role: Super Admin, TPO, PMO, BPO, dan View Only.")
+      ),
+      !readOnly && h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "Ada perubahan belum disimpan"),
+        h("button", { className:"btn btn-primary", onClick:handleSave, disabled:!dirty }, "Save")
+      )
     ),
     readOnly && h(ReadOnlyBanner),
     h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
       USER_ROLES.map(role => h(UserRoleSection, {
         key: role.key, role, expanded: !!expandedSections[role.key], onToggle: toggleSection,
-        emails: (userManagement && userManagement[role.key]) || [],
+        emails: (draft && draft[role.key]) || [],
         onAdd: onAddEmail, onUpdate: onUpdateEmail, onRemove: onRemoveEmail
       }))
     )
@@ -2079,21 +2119,8 @@ function AppRoot() {
   };
   const onExitWizard = () => setActiveView("list");
 
-  const onAddMasterItem = catKey => setMasterData(prev => ({ ...prev, [catKey]: [...(prev[catKey] || []), ""] }));
-  const onUpdateMasterItem = (catKey, idx, value) => setMasterData(prev => ({
-    ...prev, [catKey]: (prev[catKey] || []).map((v, i) => i === idx ? value : v)
-  }));
-  const onRemoveMasterItem = (catKey, idx) => setMasterData(prev => ({
-    ...prev, [catKey]: (prev[catKey] || []).filter((_, i) => i !== idx)
-  }));
-
-  const onAddUserEmail = roleKey => setUserManagement(prev => ({ ...prev, [roleKey]: [...(prev[roleKey] || []), ""] }));
-  const onUpdateUserEmail = (roleKey, idx, value) => setUserManagement(prev => ({
-    ...prev, [roleKey]: (prev[roleKey] || []).map((v, i) => i === idx ? value : v)
-  }));
-  const onRemoveUserEmail = (roleKey, idx) => setUserManagement(prev => ({
-    ...prev, [roleKey]: (prev[roleKey] || []).filter((_, i) => i !== idx)
-  }));
+  const onSaveMasterData = draft => setMasterData({ ...DEFAULT_MASTER_DATA, ...draft });
+  const onSaveUserManagement = draft => setUserManagement({ ...DEFAULT_USER_MANAGEMENT, ...draft });
 
   const onLogin = rawEmail => {
     const email = norm(rawEmail).toLowerCase();
@@ -2337,12 +2364,12 @@ function AppRoot() {
         ? h(DetailView, { ...detailViewProps, readOnly: true })
         : activeView === "master-data"
         ? h(MasterDataManagementView, {
-            masterData, onAddItem: onAddMasterItem, onUpdateItem: onUpdateMasterItem, onRemoveItem: onRemoveMasterItem,
+            masterData, onSaveAll: onSaveMasterData,
             readOnly: !currentUser || currentUser.role !== "superAdmin"
           })
         : activeView === "user-management"
         ? h(UserManagementView, {
-            userManagement, onAddEmail: onAddUserEmail, onUpdateEmail: onUpdateUserEmail, onRemoveEmail: onRemoveUserEmail,
+            userManagement, onSaveAll: onSaveUserManagement,
             readOnly: !currentUser || currentUser.role !== "superAdmin"
           })
         : PLACEHOLDER_TITLES[activeView]
