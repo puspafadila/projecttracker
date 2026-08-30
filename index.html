@@ -125,6 +125,8 @@ const Icon = {
   chevronRight: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"9 18 15 12 9 6"})),
   check: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"3", strokeLinecap:"round", strokeLinejoin:"round"}, h("polyline",{points:"20 6 9 17 4 12"})),
   logout: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"}), h("polyline",{points:"16 17 21 12 16 7"}), h("line",{x1:21,y1:12,x2:9,y2:12})),
+  lock: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("rect",{x:3,y:11,width:18,height:11,rx:2}), h("path",{d:"M7 11V7a5 5 0 0 1 10 0v4"})),
+  pencil: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M12 20h9"}), h("path",{d:"M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"})),
   database: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("ellipse",{cx:12,cy:5,rx:9,ry:3}), h("path",{d:"M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"}), h("path",{d:"M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"})),
   users: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"}), h("circle",{cx:9,cy:7,r:4}), h("path",{d:"M23 21v-2a4 4 0 0 0-3-3.87"}), h("path",{d:"M16 3.13a4 4 0 0 1 0 7.75"})),
 };
@@ -186,20 +188,44 @@ function buildWeekCells(epoch, totalWeeks) {
   }
   return out;
 }
+/* One tick per calendar month within the range, used to label the Gantt
+   header — e.g. "Jan 2026", "Feb". */
+function buildMonthTicks(epoch, totalWeeks) {
+  const out = [];
+  const start = new Date(epoch);
+  let y = start.getUTCFullYear(), m = start.getUTCMonth();
+  const endEpoch = epoch + totalWeeks * 7 * MS_PER_DAY;
+  while (true) {
+    const t = Date.UTC(y, m, 1);
+    if (t >= endEpoch) break;
+    const days = Math.floor((t - epoch) / MS_PER_DAY);
+    const w = Math.floor(days / 7);
+    if (w >= 0 && w < totalWeeks) {
+      out.push({
+        x: w * WEEK_W,
+        label: new Date(t).toLocaleDateString("id-ID", { month:"short", timeZone:"UTC" }) + (m === 0 ? ` ${y}` : ""),
+        isYearStart: m === 0
+      });
+    }
+    m++;
+    if (m > 11) { m = 0; y++; }
+  }
+  return out;
+}
 /* Column tint by calendar year — 2027 is highlighted light blue; every
    other year stays neutral white/navy. */
 function ganttYearRowColor(year) { return year === 2027 ? "#EAF1FB" : "#FFFFFF"; }
 function ganttYearHeaderColor(year) { return year === 2027 ? "#1E3A5F" : "#152238"; }
 
-function TimelineHeader({ weekCells }) {
-  return h("div", { style: { position:"relative", height:26, overflow:"hidden" }, title:"Timeline (per minggu)" },
+function TimelineHeader({ weekCells, monthTicks }) {
+  return h("div", { style: { position:"relative", height:32, overflow:"hidden" }, title:"Timeline" },
     weekCells.map(w => h("div", { key:`bg${w.index}`, style:{
       position:"absolute", left:w.x, top:0, bottom:0, width:WEEK_W, background: ganttYearHeaderColor(w.year)
     } })),
-    weekCells.map(w => h("div", { key:`wk${w.index}`, style:{ position:"absolute", left:w.x, top:0, bottom:0, borderLeft: w.isYearStart ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(255,255,255,0.12)" } })),
-    weekCells.map(w => h("span", { key:`lb${w.index}`, style:{
-      position:"absolute", left:w.x+1, top:6, fontSize:8, color:"#B7C3D6", whiteSpace:"nowrap", transform:"scale(0.9)", transformOrigin:"left top"
-    } }, `W${String(w.index+1).padStart(2,"0")}`))
+    weekCells.map(w => h("div", { key:`wk${w.index}`, style:{ position:"absolute", left:w.x, top:0, bottom:0, borderLeft: w.isYearStart ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(255,255,255,0.1)" } })),
+    monthTicks.map((t,i) => h("div", { key:i, style:{ position:"absolute", left:t.x, top:0, bottom:0, borderLeft: t.isYearStart ? "1px solid rgba(255,255,255,0.55)" : "1px solid rgba(255,255,255,0.28)" } },
+      h("span", { style:{ position:"absolute", top:9, left:4, fontSize:11, color:t.isYearStart?"#fff":"#B7C3D6", fontWeight:t.isYearStart?700:400, whiteSpace:"nowrap" } }, t.label)
+    ))
   );
 }
 
@@ -349,6 +375,19 @@ function rowPassesFilters(row, filters, colKeys) {
   });
 }
 
+/* Ownership rule: a record can only be edited/deleted by whoever created it,
+   or by a Super Admin. Records made before this feature existed (no
+   createdBy stamped) have no owner, so only Super Admin can touch those. */
+function canModifyRecord(record, currentUser) {
+  if (!currentUser) return false;
+  if (currentUser.role === "superAdmin") return true;
+  return !!(record && record.createdBy && record.createdBy === currentUser.email);
+}
+function OwnerLockNote({ record }) {
+  const owner = record && record.createdBy;
+  return h("span", { title: owner ? `Dibuat oleh ${owner} \u2014 hanya pembuat atau Super Admin yang bisa mengedit/menghapus` : "Hanya Super Admin yang bisa mengedit/menghapus data ini", style:{ color:"#CBD5E1", display:"flex" } }, h(Icon.lock,{}));
+}
+
 /* =========================================================================
    PROJECT LIST (master table)
    ========================================================================= */
@@ -422,10 +461,11 @@ const PL_COL_KEYS = PL_COLS.map(c => c.key);
 const PL_COL_BY_KEY = Object.fromEntries(PL_COLS.map(c => [c.key, c]));
 const DEFAULT_PL_COLUMN_ORDER = PL_COLS.map(c => c.key);
 
-function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard, columns, showGantt }) {
+function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard, columns, showGantt, currentUser }) {
   const [filters, setFilters] = useState({});
   const ganttRange = useMemo(() => computeGanttRange(rows), [rows]);
   const weekCells = useMemo(() => buildWeekCells(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
+  const monthTicks = useMemo(() => buildMonthTicks(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
   const timelineW = ganttRange.totalWeeks * WEEK_W;
   const todayIdx = weekIndexFor(new Date().toISOString().slice(0,10), ganttRange.epoch, ganttRange.totalWeeks);
   const fixedW = 44 + columns.reduce((s,c)=>s+c.width,0) + 40;
@@ -457,7 +497,7 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
               onFilterChange: v => onFilterChange(c.key, v) })),
             h("div", { style:{ width:40, background:"#152238" } })
           ),
-          showGantt && h("div", { style:{ width:timelineW, background:"#152238" } }, h(TimelineHeader, { weekCells }), h("div",{style:{position:"absolute"}})),
+          showGantt && h("div", { style:{ width:timelineW, background:"#152238" } }, h(TimelineHeader, { weekCells, monthTicks }), h("div",{style:{position:"absolute"}})),
         ),
         h("div", { style:{ position:"relative" } },
           showGantt && h("div", { style:{ position:"absolute", top:0, left:fixedW, bottom:0, width:timelineW, pointerEvents:"none" } },
@@ -478,7 +518,9 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
                     plCellDisplay(c.key, row, phaseMeta, onOpenWizard)
                   )),
                   h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
-                    h("button", { onClick:()=>onRemove(row.id), title:"Hapus project", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                    canModifyRecord(row, currentUser)
+                      ? h("button", { onClick:()=>onRemove(row.id), title:"Hapus project", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                      : h(OwnerLockNote, { record: row })
                   )
                 ),
                 showGantt && h("div", { style:{ width:timelineW, position:"relative", height:38 } },
@@ -492,7 +534,7 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
   );
 }
 
-function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt }) {
+function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
   const handleImportFile = e => {
@@ -522,17 +564,16 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
           const d2 = new Date(v);
           return isNaN(d2.getTime()) ? "" : d2.toISOString().slice(0,10);
         };
-        const imported = rows.map(row => ({
-          id: uid(),
-          application: String(pick(row,"Application") || ""),
-          project: String(pick(row,"Project") || ""),
-          startDate: toISODate(pick(row,"Start Date","StartDate")),
-          endDate: toISODate(pick(row,"End Date","EndDate")),
-          tpo: String(pick(row,"TPO") || ""),
-          deliveryLead: String(pick(row,"Delivery Lead","DeliveryLead") || ""),
-          priority: String(pick(row,"Priority") || ""),
-          phase: String(pick(row,"Phase") || ""),
-        })).filter(r => r.application || r.project);
+        const imported = rows.map(row => {
+          const obj = { id: uid() };
+          PL_COLS.forEach(c => {
+            const compact = c.label.replace(/\s+/g, "");
+            const raw = pick(row, c.label, compact);
+            obj[c.key] = (c.key === "startDate" || c.key === "endDate") ? toISODate(raw) : String(raw || "");
+          });
+          obj.createdBy = currentUser ? currentUser.email : "";
+          return obj;
+        }).filter(r => r.application || r.project);
         if (imported.length === 0) alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Application atau Project terisi.");
         else { onImport(imported); alert(`${imported.length} project berhasil diimpor.`); }
       } catch (err) {
@@ -561,7 +602,7 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
       h(ProjectListTable, {
         rows: projectList, onRemove, sortConfig, onSort, phaseOptions, onOpenWizard,
         columns: columnOrder.filter(k => !hiddenColumns.includes(k) && PL_COL_BY_KEY[k]).map(k => PL_COL_BY_KEY[k]),
-        showGantt: !ganttHidden
+        showGantt: !ganttHidden, currentUser
       })
     )
   );
@@ -597,6 +638,22 @@ function cellEditor(colKey, task, onUpdate, picListId) {
     case "priority": return h(RagSelect, { value: task.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
     case "phase": return h(RagSelect, { value: task.phase, options: PHASE_OPTS, bgMap: PHASE_BG, fgMap: PHASE_FG, onChange: v => onUpdate("phase", v) });
     case "notes": return h("input", { value: task.notes||"", onChange:e=>onUpdate("notes", e.target.value), placeholder:"Catatan\u2026", style:textStyle });
+    default: return null;
+  }
+}
+
+/* Read-only rendering for a task row the current user isn't allowed to edit. */
+function cellDisplayReadOnly(colKey, task) {
+  const textStyle = { fontSize:13, color:"#334155" };
+  switch (colKey) {
+    case "task": return h("span", { style:textStyle }, task.task || "\u2014");
+    case "startDate": return h("span", { style:{ ...textStyle, fontSize:12 } }, task.startDate || "\u2014");
+    case "endDate": return h("span", { style:{ ...textStyle, fontSize:12 } }, task.endDate || "\u2014");
+    case "pic": return h("span", { style:textStyle }, task.pic || "\u2014");
+    case "status": return h(StaticBadge, { value: task.status, bgMap: STATUS_BG, fgMap: STATUS_FG });
+    case "priority": return h(StaticBadge, { value: task.priority, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG });
+    case "phase": return h(StaticBadge, { value: task.phase, bgMap: PHASE_BG, fgMap: PHASE_FG });
+    case "notes": return h("span", { style:textStyle }, task.notes || "\u2014");
     default: return null;
   }
 }
@@ -656,10 +713,11 @@ function ColumnManager({ columnOrder, hiddenColumns, onToggleVisibility, onReord
   );
 }
 
-function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onSort, picListId, showGantt }) {
+function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onSort, picListId, showGantt, currentUser }) {
   const [filters, setFilters] = useState({});
   const ganttRange = useMemo(() => computeGanttRange(tasks), [tasks]);
   const weekCells = useMemo(() => buildWeekCells(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
+  const monthTicks = useMemo(() => buildMonthTicks(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
   const timelineW = ganttRange.totalWeeks * WEEK_W;
   const todayIdx = weekIndexFor(new Date().toISOString().slice(0,10), ganttRange.epoch, ganttRange.totalWeeks);
   const fixedW = 44 + columns.reduce((s,c)=>s+c.width,0) + 40;
@@ -687,7 +745,7 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onS
               onFilterChange: v => onFilterChange(c.key, v) })),
             h("div", { style:{ width:40 } })
           ),
-          showGantt && h("div", { style:{ width:timelineW, background:"#152238" } }, h(TimelineHeader, { weekCells }))
+          showGantt && h("div", { style:{ width:timelineW, background:"#152238" } }, h(TimelineHeader, { weekCells, monthTicks }))
         ),
         h("div", { style:{ position:"relative" } },
           showGantt && h("div", { style:{ position:"absolute", top:0, left:fixedW, bottom:0, width:timelineW, pointerEvents:"none" } },
@@ -699,14 +757,17 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onS
             ? h("div", { style:{ padding:"36px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "Tidak ada task yang cocok dengan filter.")
             : filteredTasks.map((task, i) => {
               const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
+              const editable = canModifyRecord(task, currentUser);
               return h("div", { key:task.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
                 h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
                   h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, task.no),
-                  columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px" } },
-                    cellEditor(c.key, task, (field, val) => onUpdateTask(task.id, field, val), picListId)
+                  columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px", display:"flex", alignItems:"center", minHeight:34 } },
+                    editable ? cellEditor(c.key, task, (field, val) => onUpdateTask(task.id, field, val), picListId) : cellDisplayReadOnly(c.key, task)
                   )),
                   h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
-                    h("button", { onClick:()=>onRemoveTask(task.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                    editable
+                      ? h("button", { onClick:()=>onRemoveTask(task.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                      : h(OwnerLockNote, { record: task })
                   )
                 ),
                 showGantt && h("div", { style:{ width:timelineW, position:"relative", height:38 } },
@@ -774,7 +835,7 @@ function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected
   );
 }
 
-function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId }) {
+function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, currentUser }) {
   const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
   const [filters, setFilters] = useState({});
   const visibleCols = TODO_COLS.filter(c => c.key === "task" || !hiddenColumns.includes(c.key));
@@ -823,6 +884,11 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId }) {
             ? h("tr", null, h("td", { colSpan: visibleCols.length + 1, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Tidak ada Task yang cocok dengan filter.'))
           : sorted.map((t, i) => h("tr", { key:t.id, style:{ background: i%2===0 ? "#fff" : "#FAFBFC" } },
               visibleCols.map(c => h("td", { key:c.key, style:tdStyle },
+                !canModifyRecord(t, currentUser) ? h("span", { style:{ fontSize:13, color:"#334155" } },
+                  c.key === "status" ? h(StaticBadge, { value:t.status, bgMap: STATUS_BG, fgMap: STATUS_FG }) :
+                  c.key === "blocker" ? h(StaticBadge, { value:t.blocker, bgMap: TODO_BLOCKER_BG, fgMap: TODO_BLOCKER_FG }) :
+                  (t[c.key] || "\u2014")
+                ) :
                 c.key === "task" ? h("input", { value:t.task||"", onChange:e=>onUpdate(t.id,"task",e.target.value), placeholder:"Nama task\u2026",
                     style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
                 c.key === "pic" ? h("input", { value:t.pic||"", onChange:e=>onUpdate(t.id,"pic",e.target.value), list:picListId, placeholder:"PIC",
@@ -834,7 +900,9 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId }) {
                 null
               )),
               h("td", { style:{ ...tdStyle, textAlign:"center" } },
-                h("button", { onClick:()=>onRemove(t.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                canModifyRecord(t, currentUser)
+                  ? h("button", { onClick:()=>onRemove(t.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
+                  : h(OwnerLockNote, { record: t })
               )
             ))
         )
@@ -910,7 +978,8 @@ function DetailView({
   visibleColumns, taskColumnOrder, taskHiddenColumns, onToggleColumnVisibility, onReorderColumn,
   sortConfig, onSort, sortedTasks,
   onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
-  onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics, hideSelector, readOnly, ganttHidden, onToggleGantt
+  onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics, hideSelector, readOnly, ganttHidden, onToggleGantt, currentUser,
+  onSaveProjectFields, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions
 }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
@@ -984,6 +1053,13 @@ function DetailView({
   };
 
   const hasIdentity = norm(applicationText) && norm(projectText);
+  const projectRow = useMemo(() => {
+    if (!hasIdentity) return null;
+    return (projectList || []).find(r =>
+      norm(r.application).toLowerCase() === norm(applicationText).toLowerCase() &&
+      norm(r.project).toLowerCase() === norm(projectText).toLowerCase()
+    ) || null;
+  }, [projectList, applicationText, projectText, hasIdentity]);
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:20 } },
@@ -1028,7 +1104,7 @@ function DetailView({
       h("datalist", { id:picListId }, pics.map(p => h("option", { key:p, value:p }))),
       sortedTasks.length === 0
         ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } }, 'Belum ada task. Klik "Tambah Task" atau import dari file Excel.')
-        : h(TaskTable, { tasks: sortedTasks, onUpdateTask, onRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden })
+        : h(TaskTable, { tasks: sortedTasks, onUpdateTask, onRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
@@ -1041,13 +1117,18 @@ function DetailView({
             h(Icon.plus,{}), "Tambah Task")
         )
       ),
-      h(TodoTable, { todos: record.todos || [], onUpdate: onUpdateTodo, onRemove: onRemoveTodo, hiddenColumns: todoHiddenColumns, picListId })
+      h(TodoTable, { todos: record.todos || [], onUpdate: onUpdateTodo, onRemove: onRemoveTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
       h("div", { style:{ fontSize:14, fontWeight:600, color:"#334155", marginBottom:14 } }, "Notes"),
       h(UpdateLog, { entries: record.updates || [], onSubmit: onSubmitUpdate, onDelete: onDeleteUpdate })
-    )
+    ),
+
+    projectRow && h(ProjectDetailsCard, {
+      projectRow, onSave: fields => onSaveProjectFields(projectRow.id, fields), currentUser,
+      phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions
+    })
     )
   );
 }
@@ -1331,7 +1412,7 @@ function MasterDataSection({ category, expanded, onToggle, items, onAdd, onUpdat
   );
 }
 
-function MasterDataManagementView({ masterData, onAddItem, onUpdateItem, onRemoveItem }) {
+function MasterDataManagementView({ masterData, onAddItem, onUpdateItem, onRemoveItem, readOnly }) {
   const [expandedSections, setExpandedSections] = useState({});
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
 
@@ -1340,11 +1421,14 @@ function MasterDataManagementView({ masterData, onAddItem, onUpdateItem, onRemov
       h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Master Data Management"),
       h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar master data yang digunakan di seluruh aplikasi: Phase, Mountain, Stream & Sub-Stream, Applications, dan Delivery Model.")
     ),
-    MASTER_DATA_CATEGORIES.map(cat => h(MasterDataSection, {
-      key: cat.key, category: cat, expanded: !!expandedSections[cat.key], onToggle: toggleSection,
-      items: (masterData && masterData[cat.key]) || [],
-      onAdd: onAddItem, onUpdate: onUpdateItem, onRemove: onRemoveItem
-    }))
+    readOnly && h(ReadOnlyBanner),
+    h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
+      MASTER_DATA_CATEGORIES.map(cat => h(MasterDataSection, {
+        key: cat.key, category: cat, expanded: !!expandedSections[cat.key], onToggle: toggleSection,
+        items: (masterData && masterData[cat.key]) || [],
+        onAdd: onAddItem, onUpdate: onUpdateItem, onRemove: onRemoveItem
+      }))
+    )
   );
 }
 
@@ -1441,7 +1525,7 @@ function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, on
   );
 }
 
-function UserManagementView({ userManagement, onAddEmail, onUpdateEmail, onRemoveEmail }) {
+function UserManagementView({ userManagement, onAddEmail, onUpdateEmail, onRemoveEmail, readOnly }) {
   const [expandedSections, setExpandedSections] = useState({});
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
 
@@ -1450,11 +1534,14 @@ function UserManagementView({ userManagement, onAddEmail, onUpdateEmail, onRemov
       h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "User Management"),
       h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Kelola daftar email pengguna untuk setiap role: Super Admin, TPO, PMO, BPO, dan View Only.")
     ),
-    USER_ROLES.map(role => h(UserRoleSection, {
-      key: role.key, role, expanded: !!expandedSections[role.key], onToggle: toggleSection,
-      emails: (userManagement && userManagement[role.key]) || [],
-      onAdd: onAddEmail, onUpdate: onUpdateEmail, onRemove: onRemoveEmail
-    }))
+    readOnly && h(ReadOnlyBanner),
+    h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
+      USER_ROLES.map(role => h(UserRoleSection, {
+        key: role.key, role, expanded: !!expandedSections[role.key], onToggle: toggleSection,
+        emails: (userManagement && userManagement[role.key]) || [],
+        onAdd: onAddEmail, onUpdate: onUpdateEmail, onRemove: onRemoveEmail
+      }))
+    )
   );
 }
 
@@ -1630,7 +1717,7 @@ function MasterDataSelect({ value, options, onChange, style }) {
   );
 }
 
-function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions }) {
+function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, formTitle, submitLabel, onCancel }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 9px", outline:"none", background:"#fff" };
   const phaseMeta = useMemo(() => {
     const { bg, fg } = buildPhaseColorMaps(phaseOptions);
@@ -1640,7 +1727,7 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
 
   return h("div", { style:{ border:cellBorder, borderRadius:10, overflow:"hidden", background:"#fff" } },
     h("div", { style:{ padding:"14px 16px", borderBottom:cellBorder } },
-      h("div", { style:{ fontSize:18, fontWeight:800, color:"#1E3A5F" } }, "Form Create Project")
+      h("div", { style:{ fontSize:18, fontWeight:800, color:"#1E3A5F" } }, formTitle || "Form Create Project")
     ),
     h("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr" } },
       h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
@@ -1684,8 +1771,9 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
           h(RagSelect, { value: form.phase, options: phaseMeta.options, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg, onChange: v => onFieldChange("phase", v) }))),
       h("div", { style:{ background:"#EAF1F8" } })
     ),
-    h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", borderTop:cellBorder } },
-      h("button", { className:"btn btn-primary", onClick:onSubmit }, "Submit")
+    h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", gap:10, borderTop:cellBorder } },
+      onCancel && h("button", { className:"btn", onClick:onCancel }, "Batal"),
+      h("button", { className:"btn btn-primary", onClick:onSubmit }, submitLabel || "Submit")
     )
   );
 }
@@ -1700,7 +1788,38 @@ function CreateProjectView({ form, onFieldChange, onSubmit, phaseOptions, mounta
   );
 }
 
-function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave }) {
+/* Shows the project's core fields (Application, Delivery Model, Mountain,
+   Stream, etc. — same fields as Create Project) at the top of the Timeline
+   page, editable in place by the project's creator or a Super Admin. */
+function ProjectDetailsCard({ projectRow, onSave, currentUser, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions }) {
+  const editable = canModifyRecord(projectRow, currentUser);
+  const extractFields = row => ({
+    application: (row && row.application) || "", deliveryModel: (row && row.deliveryModel) || "",
+    project: (row && row.project) || "", resource: (row && row.resource) || "",
+    mountain: (row && row.mountain) || "", stream: (row && row.stream) || "", subStream: (row && row.subStream) || "",
+    startDate: (row && row.startDate) || "", endDate: (row && row.endDate) || "",
+    tpo: (row && row.tpo) || "", deliveryLead: (row && row.deliveryLead) || "",
+    priority: (row && row.priority) || "", phase: (row && row.phase) || ""
+  });
+  const [form, setForm] = useState(() => extractFields(projectRow));
+  useEffect(() => { setForm(extractFields(projectRow)); }, [projectRow && projectRow.id]);
+  const onFieldChange = (field, value) => setForm(f => ({ ...f, [field]: value }));
+
+  return h("div", { className:"card", style:{ marginTop:16, padding:0, overflow:"hidden" } },
+    !editable && h("div", { style:{ padding:"10px 16px", background:"#F8FAFC", borderBottom:"1px solid #E2E8F0", fontSize:12, color:"#94A3B8" } },
+      "Hanya pembuat project atau Super Admin yang bisa mengedit detail ini."
+    ),
+    h("div", { style: editable ? {} : { pointerEvents:"none", opacity:0.65 } },
+      h(CreateProjectForm, {
+        form, onFieldChange, onSubmit: () => onSave(form),
+        phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions,
+        formTitle: "Detail Project", submitLabel: "Save"
+      })
+    )
+  );
+}
+
+function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave, currentUser }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
   const docTypeListId = "doc-type-suggest";
   return h("div", null,
@@ -1716,18 +1835,27 @@ function DocumentsSection({ rows, onAdd, onUpdate, onRemove, onSave }) {
         h("tbody", null,
           (!rows || rows.length === 0)
             ? h("tr", null, h("td", { colSpan:4, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'Belum ada dokumen. Klik "Add" untuk menambah baris.'))
-            : rows.map((row, i) => h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
+            : rows.map((row, i) => {
+              const editable = canModifyRecord(row, currentUser);
+              return h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, i + 1),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
-                  h("input", { value: row.docType || "", onChange:e => onUpdate(row.id, "docType", e.target.value), list:docTypeListId, placeholder:"PRD, Mockup, atau lainnya\u2026", style:inputStyle })
+                  editable
+                    ? h("input", { value: row.docType || "", onChange:e => onUpdate(row.id, "docType", e.target.value), list:docTypeListId, placeholder:"PRD, Mockup, atau lainnya\u2026", style:inputStyle })
+                    : h("span", { style:{ fontSize:13, color:"#334155" } }, row.docType || "\u2014")
                 ),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
-                  h("input", { value: row.link || "", onChange:e => onUpdate(row.id, "link", e.target.value), placeholder:"https://\u2026", style:inputStyle })
+                  editable
+                    ? h("input", { value: row.link || "", onChange:e => onUpdate(row.id, "link", e.target.value), placeholder:"https://\u2026", style:inputStyle })
+                    : h("span", { style:{ fontSize:13, color:"#334155" } }, row.link || "\u2014")
                 ),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", textAlign:"center" } },
-                  h("button", { onClick:() => onRemove(row.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex", margin:"0 auto" } }, h(Icon.trash,{}))
+                  editable
+                    ? h("button", { onClick:() => onRemove(row.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex", margin:"0 auto" } }, h(Icon.trash,{}))
+                    : h("div", { style:{ display:"flex", justifyContent:"center" } }, h(OwnerLockNote, { record: row }))
                 )
-              ))
+              );
+            })
         )
       )
     ),
@@ -1759,7 +1887,7 @@ function BaselineSection({ section, expanded, onToggle, onSave }) {
 function ProjectBaselineView({
   applicationText, projectText, onApplicationChange, onProjectChange, projectList,
   charter, onUpdateCharterField, readiness, onToggleReadinessItem, onSaveSection,
-  documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow, hideSelector, readOnly
+  documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow, hideSelector, readOnly, currentUser
 }) {
   const [expandedSections, setExpandedSections] = useState({ readiness:false, charter:false, benefit:false, stakeholder:false, risk:false, upload:false });
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
@@ -1820,7 +1948,7 @@ function ProjectBaselineView({
           ),
           expanded && h(DocumentsSection, {
             rows: documentRows, onAdd: onAddDocumentRow, onUpdate: onUpdateDocumentRow, onRemove: onRemoveDocumentRow,
-            onSave: () => onSaveSection("upload")
+            onSave: () => onSaveSection("upload"), currentUser
           })
         );
       }
@@ -1924,7 +2052,7 @@ function AppRoot() {
   const BASELINE_SAVE_TO_READINESS = { charter:"charter", benefit:"benefit", stakeholder:"stakeholder", risk:"risk", upload:"prd" };
   const onSaveBaselineSection = sectionKey => setReadinessTrue(BASELINE_SAVE_TO_READINESS[sectionKey] || sectionKey);
   const onAddDocumentRow = () => updateBaselineRecord(cur => ({
-    ...cur, documentRows: [...(cur.documentRows || []), { id: uid(), docType:"", link:"" }]
+    ...cur, documentRows: [...(cur.documentRows || []), { id: uid(), docType:"", link:"", createdBy: currentUser ? currentUser.email : "" }]
   }));
   const onUpdateDocumentRow = (rowId, field, value) => updateBaselineRecord(cur => ({
     ...cur, documentRows: (cur.documentRows || []).map(r => r.id === rowId ? { ...r, [field]: value } : r)
@@ -2016,17 +2144,28 @@ function AppRoot() {
 
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
-  const onImportProjectRows = rows => setProjectList(list => [...list, ...rows]);
+  const onImportProjectRows = rows => setProjectList(list => [
+    ...list, ...rows.map(r => ({ ...r, createdBy: currentUser ? currentUser.email : "" }))
+  ]);
   const onCreateProjectFieldChange = (field, value) => setCreateProjectForm(f => ({ ...f, [field]: value }));
   const onSubmitCreateProject = () => {
     if (!norm(createProjectForm.application) || !norm(createProjectForm.project)) {
       alert("Application dan Project wajib diisi.");
       return;
     }
-    setProjectList(list => [...list, { id: uid(), ...createProjectForm }]);
+    setProjectList(list => [...list, { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "" }]);
     setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
     setActiveView("list");
   };
+
+  const onSaveProjectFields = (projectId, fields) => {
+    if (!norm(fields.application) || !norm(fields.project)) {
+      alert("Application dan Project wajib diisi.");
+      return;
+    }
+    setProjectList(list => list.map(r => r.id === projectId ? { ...r, ...fields } : r));
+  };
+
   const onPlSort = k => setPlSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
   const sortedProjectList = useMemo(() => {
     if (!plSortConfig.key) return projectList;
@@ -2073,17 +2212,19 @@ function AppRoot() {
   const onAddTask = () => updateRecord(cur => {
     const list = cur.tasks || [];
     const maxNo = Math.max(0, ...list.map(t => parseInt(t.no) || 0));
-    const task = { id: uid(), no: String(maxNo + 1), task:"", startDate:"", endDate:"", pic:"", status:"", priority:"", phase:"", notes:"" };
+    const task = { id: uid(), no: String(maxNo + 1), task:"", startDate:"", endDate:"", pic:"", status:"", priority:"", phase:"", notes:"", createdBy: currentUser ? currentUser.email : "" };
     return { ...cur, tasks: [...list, task] };
   });
   const onUpdateTask = (taskId, field, value) => updateRecord(cur => ({
     ...cur, tasks: (cur.tasks || []).map(t => t.id === taskId ? { ...t, [field]: value } : t)
   }));
   const onRemoveTask = taskId => updateRecord(cur => ({ ...cur, tasks: (cur.tasks || []).filter(t => t.id !== taskId) }));
-  const onImportTasks = newTasks => updateRecord(cur => ({ ...cur, tasks: [...(cur.tasks || []), ...newTasks] }));
+  const onImportTasks = newTasks => updateRecord(cur => ({
+    ...cur, tasks: [...(cur.tasks || []), ...newTasks.map(t => ({ ...t, createdBy: currentUser ? currentUser.email : "" }))]
+  }));
 
   const onAddTodo = () => updateRecord(cur => ({
-    ...cur, todos: [...(cur.todos || []), { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"" }]
+    ...cur, todos: [...(cur.todos || []), { id: uid(), task:"", pic:"", dueDate:"", status:"", blocker:"", createdBy: currentUser ? currentUser.email : "" }]
   }));
   const onUpdateTodo = (todoId, field, value) => updateRecord(cur => ({
     ...cur, todos: (cur.todos || []).map(t => t.id === todoId ? { ...t, [field]: value } : t)
@@ -2138,7 +2279,9 @@ function AppRoot() {
     sortConfig, onSort, sortedTasks,
     onAddTodo, onUpdateTodo, onRemoveTodo, todoHiddenColumns, onToggleTodoColumn,
     onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics,
-    ganttHidden: taskGanttHidden, onToggleGantt: onToggleTaskGantt
+    ganttHidden: taskGanttHidden, onToggleGantt: onToggleTaskGantt, currentUser,
+    onSaveProjectFields, phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
+    subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel
   };
   const projectBaselineViewProps = {
     applicationText: baselineApplicationText, projectText: baselineProjectText,
@@ -2146,7 +2289,7 @@ function AppRoot() {
     projectList, charter: baselineRecord.charter, onUpdateCharterField,
     readiness: baselineRecord.readiness, onToggleReadinessItem,
     onSaveSection: onSaveBaselineSection,
-    documentRows: baselineRecord.documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow
+    documentRows: baselineRecord.documentRows, onAddDocumentRow, onUpdateDocumentRow, onRemoveDocumentRow, currentUser
   };
   const changeManagementViewProps = {
     applicationText: cmApplicationText, projectText: cmProjectText,
@@ -2180,7 +2323,7 @@ function AppRoot() {
             phaseOptions: masterData.phase, onOpenWizard: onOpenProjectWizard,
             columnOrder: plColumnOrder, hiddenColumns: plHiddenColumns,
             onToggleColumnVisibility: onTogglePlColumnVisibility, onReorderColumn: onReorderPlColumn,
-            ganttHidden: plGanttHidden, onToggleGantt: onTogglePlGantt
+            ganttHidden: plGanttHidden, onToggleGantt: onTogglePlGantt, currentUser
           })
         : activeView === "project-wizard"
         ? h(ProjectWizardView, {
@@ -2194,11 +2337,13 @@ function AppRoot() {
         ? h(DetailView, { ...detailViewProps, readOnly: true })
         : activeView === "master-data"
         ? h(MasterDataManagementView, {
-            masterData, onAddItem: onAddMasterItem, onUpdateItem: onUpdateMasterItem, onRemoveItem: onRemoveMasterItem
+            masterData, onAddItem: onAddMasterItem, onUpdateItem: onUpdateMasterItem, onRemoveItem: onRemoveMasterItem,
+            readOnly: !currentUser || currentUser.role !== "superAdmin"
           })
         : activeView === "user-management"
         ? h(UserManagementView, {
-            userManagement, onAddEmail: onAddUserEmail, onUpdateEmail: onUpdateUserEmail, onRemoveEmail: onRemoveUserEmail
+            userManagement, onAddEmail: onAddUserEmail, onUpdateEmail: onUpdateUserEmail, onRemoveEmail: onRemoveUserEmail,
+            readOnly: !currentUser || currentUser.role !== "superAdmin"
           })
         : PLACEHOLDER_TITLES[activeView]
         ? (activeView === "doc-baseline"
