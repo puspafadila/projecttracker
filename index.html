@@ -534,7 +534,7 @@ function ProjectListTable({ rows, onRemove, sortConfig, onSort, phaseOptions, on
   );
 }
 
-function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
+function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
   const handleImportFile = e => {
@@ -574,8 +574,42 @@ function ProjectListView({ projectList, onRemove, sortConfig, onSort, onImport, 
           obj.createdBy = currentUser ? currentUser.email : "";
           return obj;
         }).filter(r => r.application || r.project);
-        if (imported.length === 0) alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Application atau Project terisi.");
-        else { onImport(imported); alert(`${imported.length} project berhasil diimpor.`); }
+
+        if (imported.length === 0) {
+          alert("Tidak ada baris valid yang bisa diimpor. Pastikan kolom Application atau Project terisi.");
+          return;
+        }
+
+        // Every value in these columns must match an option already defined
+        // in Master Data Management — reject the whole import otherwise.
+        const MASTER_CHECKS = [
+          { key:"application", label:"Application", options: applicationOptions },
+          { key:"deliveryModel", label:"Delivery Model", options: deliveryModelOptions },
+          { key:"mountain", label:"Mountain", options: mountainOptions },
+          { key:"stream", label:"Stream", options: streamOptions },
+          { key:"subStream", label:"Sub Stream", options: subStreamOptions },
+          { key:"phase", label:"Phase", options: phaseOptions },
+        ];
+        const matches = (value, options) => (options || []).some(o => norm(o).toLowerCase() === norm(value).toLowerCase());
+        const errors = [];
+        imported.forEach((row, i) => {
+          MASTER_CHECKS.forEach(chk => {
+            const val = row[chk.key];
+            if (val && !matches(val, chk.options)) {
+              errors.push(`Baris ${i + 1}: ${chk.label} "${val}" tidak ada di Master Data Management`);
+            }
+          });
+        });
+
+        if (errors.length > 0) {
+          const shown = errors.slice(0, 10).join("\n");
+          const more = errors.length > 10 ? `\n\u2026dan ${errors.length - 10} masalah lainnya.` : "";
+          alert(`Import dibatalkan. Ditemukan ${errors.length} nilai yang tidak sesuai dengan Master Data Management:\n\n${shown}${more}\n\nPerbaiki data di file, atau tambahkan nilai tersebut ke Master Data Management terlebih dahulu.`);
+          return;
+        }
+
+        onImport(imported);
+        alert(`${imported.length} project berhasil diimpor.`);
       } catch (err) {
         alert("Gagal membaca file. Pastikan formatnya sesuai template (.xlsx).");
       }
@@ -2347,7 +2381,9 @@ function AppRoot() {
         ? h(ProjectListView, {
             projectList: sortedProjectList, onRemove: onRemoveProjectRow,
             sortConfig: plSortConfig, onSort: onPlSort, onImport: onImportProjectRows, onExport: onExportProjectList,
-            phaseOptions: masterData.phase, onOpenWizard: onOpenProjectWizard,
+            phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
+            subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel,
+            onOpenWizard: onOpenProjectWizard,
             columnOrder: plColumnOrder, hiddenColumns: plHiddenColumns,
             onToggleColumnVisibility: onTogglePlColumnVisibility, onReorderColumn: onReorderPlColumn,
             ganttHidden: plGanttHidden, onToggleGantt: onTogglePlGantt, currentUser
