@@ -73,27 +73,32 @@ async function fetchRemoteState() {
   if (!supabaseClient) return null;
   const { data, error } = await supabaseClient.from(SUPABASE_TABLE).select("*").eq("id", SUPABASE_ROW_ID).maybeSingle();
   if (error || !data) return null;
-  const out = {};
+  const out = { updatedAt: data.updated_at || null };
   Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (data[col] !== undefined) out[stateKey] = data[col]; });
   return out;
 }
 
 async function pushRemoteState(partial) {
-  if (!supabaseClient) return false;
-  const row = { id: SUPABASE_ROW_ID, updated_at: new Date().toISOString() };
+  if (!supabaseClient) return { ok:false, updatedAt:null };
+  const updatedAt = new Date().toISOString();
+  const row = { id: SUPABASE_ROW_ID, updated_at: updatedAt };
   Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (partial[stateKey] !== undefined) row[col] = partial[stateKey]; });
   const { error } = await supabaseClient.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" });
   if (error) console.error("Supabase save failed:", error.message || error);
-  return !error;
+  return { ok: !error, updatedAt };
 }
 
+/* Real-time events can arrive out of order (reconnect backlogs, network
+   lag) — a stale event delivered late must never overwrite something
+   newer we already have. Every event carries its row's updated_at, and
+   the caller only applies it if that's newer than the last one applied. */
 function subscribeRemoteState(onChange) {
   if (!supabaseClient) return () => {};
   const channel = supabaseClient
     .channel("app_state_changes")
     .on("postgres_changes", { event: "*", schema: "public", table: SUPABASE_TABLE, filter: `id=eq.${SUPABASE_ROW_ID}` }, payload => {
       if (!payload.new) return;
-      const out = {};
+      const out = { updatedAt: payload.new.updated_at || null };
       Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (payload.new[col] !== undefined) out[stateKey] = payload.new[col]; });
       onChange(out);
     })
@@ -3085,6 +3090,7 @@ function AppRoot() {
   const [weeklyReports, setWeeklyReports] = useState(stored.weeklyReports || []);
   const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient);
   const remoteHydrated = useRef(false);
+  const lastAppliedUpdatedAt = useRef(null);
   const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
   const [cmApplicationText, setCmApplicationText] = useState(stored.lastCmApplication || "");
   const [cmProjectText, setCmProjectText] = useState(stored.lastCmProject || "");
@@ -3127,11 +3133,16 @@ function AppRoot() {
         if (remote.masterData !== undefined) setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
         if (remote.userManagement !== undefined) setUserManagement(remote.userManagement);
         if (remote.weeklyReports !== undefined) setWeeklyReports(remote.weeklyReports);
+        lastAppliedUpdatedAt.current = remote.updatedAt || null;
       }
       remoteHydrated.current = true;
       setRemoteLoading(false);
     });
     const unsubscribe = subscribeRemoteState(remote => {
+      // Ignore anything not newer than what we already have — this is what
+      // stops a late/out-of-order event (reconnect backlog, network lag)
+      // from reverting data we (or someone else) already moved past.
+      if (remote.updatedAt && lastAppliedUpdatedAt.current && remote.updatedAt <= lastAppliedUpdatedAt.current) return;
       if (remote.projectList !== undefined) setProjectList(remote.projectList);
       if (remote.records !== undefined) setRecords(remote.records);
       if (remote.baselineRecords !== undefined) setBaselineRecords(remote.baselineRecords);
@@ -3139,6 +3150,7 @@ function AppRoot() {
       if (remote.masterData !== undefined) setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
       if (remote.userManagement !== undefined) setUserManagement(remote.userManagement);
       if (remote.weeklyReports !== undefined) setWeeklyReports(remote.weeklyReports);
+      if (remote.updatedAt) lastAppliedUpdatedAt.current = remote.updatedAt;
     });
     return () => { cancelled = true; unsubscribe(); };
   }, []);
@@ -3269,7 +3281,13 @@ function AppRoot() {
       setSaveStatus(ok ? "saved" : "error");
       if (supabaseClient && remoteHydrated.current) {
         pushRemoteState({ projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports })
-          .then(remoteOk => setRemoteSaveFailed(!remoteOk));
+          .then(result => {
+            setRemoteSaveFailed(!result.ok);
+            // Mark our own write as the latest known state so a late echo
+            // of it (or anything older, like a stale reconnect backlog
+            // event) can never be applied on top of it afterwards.
+            if (result.ok && result.updatedAt) lastAppliedUpdatedAt.current = result.updatedAt;
+          });
       }
     }, 400);
     return () => clearTimeout(t);
