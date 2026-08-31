@@ -568,9 +568,42 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseO
   );
 }
 
-function ProjectListView({ projectList, onUpdate, onRemove, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
+/* Shared Application+Project identity key, used to detect duplicates on
+   import (both within the file and against what's already in the list). */
+function comboKeyOf(r) { return `${norm(r.application).toLowerCase()}\u2758${norm(r.project).toLowerCase()}`; }
+
+function ImportDuplicateModal({ pending, onCancel, onReplace }) {
+  if (!pending) return null;
+  const count = pending.duplicates.length;
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onCancel
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, padding:24, maxWidth:420, width:"100%", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238", marginBottom:8 } }, "Project already registered"),
+      h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:12 } },
+        `${count} project${count === 1 ? "" : "s"} in this file ${count === 1 ? "is" : "are"} already in Project List. Replace data?`
+      ),
+      h("div", { style:{ maxHeight:140, overflow:"auto", border:"1px solid #F1F5F9", borderRadius:8, padding:"8px 10px", marginBottom:20 } },
+        pending.duplicates.map((d, i) => h("div", { key:i, style:{ fontSize:12, color:"#334155", padding:"3px 0" } },
+          `${d.imported.application || "\u2014"} \u2014 ${d.imported.project || "\u2014"}`
+        ))
+      ),
+      h("div", { style:{ display:"flex", gap:10, justifyContent:"flex-end", flexWrap:"wrap" } },
+        h("button", { className:"btn", onClick:onCancel }, "Cancel Import"),
+        h("button", { className:"btn btn-primary", onClick:onReplace }, "Replace Data")
+      )
+    )
+  );
+}
+
+function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
+  const [pendingImport, setPendingImport] = useState(null);
   const handleImportFile = e => {
     if (!currentUser || currentUser.role !== "superAdmin") { e.target.value = ""; return; }
     const file = e.target.files[0];
@@ -615,19 +648,16 @@ function ProjectListView({ projectList, onUpdate, onRemove, sortConfig, onSort, 
           return;
         }
 
-        // Reject the whole import if any row's Application + Project
-        // combination is already in Project List, or repeats within the
-        // file itself — no duplicate projects allowed either way.
+        // Reject the whole import if a combination repeats within the file
+        // itself — that's a data-quality issue in the file, not something
+        // a Replace prompt can meaningfully resolve.
         const comboKey = r => `${norm(r.application).toLowerCase()}\u2758${norm(r.project).toLowerCase()}`;
-        const existingCombos = new Set((projectList || []).map(comboKey));
         const seenInFile = new Map();
         const dupErrors = [];
         imported.forEach((row, i) => {
-          const combo = comboKey(row);
           if (!row.application && !row.project) return;
-          if (existingCombos.has(combo)) {
-            dupErrors.push(`Row ${i + 1}: Application "${row.application}" + Project "${row.project}" already exists in Project List`);
-          } else if (seenInFile.has(combo)) {
+          const combo = comboKey(row);
+          if (seenInFile.has(combo)) {
             dupErrors.push(`Row ${i + 1}: duplicates row ${seenInFile.get(combo) + 1} in this file (Application "${row.application}" + Project "${row.project}")`);
           } else {
             seenInFile.set(combo, i);
@@ -637,7 +667,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, sortConfig, onSort, 
         if (dupErrors.length > 0) {
           const shown = dupErrors.slice(0, 10).join("\n");
           const more = dupErrors.length > 10 ? `\n\u2026and ${dupErrors.length - 10} more issue(s).` : "";
-          alert(`Import cancelled. Found ${dupErrors.length} duplicate Application + Project combination(s):\n\n${shown}${more}\n\nEach Application + Project combination must be unique.`);
+          alert(`Import cancelled. Found ${dupErrors.length} duplicate Application + Project combination(s) within this file:\n\n${shown}${more}\n\nEach Application + Project combination must be unique within the file.`);
           return;
         }
 
@@ -669,6 +699,21 @@ function ProjectListView({ projectList, onUpdate, onRemove, sortConfig, onSort, 
           return;
         }
 
+        // Rows whose Application + Project already exists in Project List
+        // aren't rejected outright — ask whether to replace them instead.
+        const existingByCombo = new Map((projectList || []).map(r => [comboKey(r), r]));
+        const duplicates = [], freshRows = [];
+        imported.forEach(row => {
+          const existing = existingByCombo.get(comboKey(row));
+          if (existing) duplicates.push({ imported: row, existing });
+          else freshRows.push(row);
+        });
+
+        if (duplicates.length > 0) {
+          setPendingImport({ freshRows, duplicates });
+          return;
+        }
+
         onImport(imported);
         alert(`${imported.length} project(s) imported successfully.`);
       } catch (err) {
@@ -680,6 +725,22 @@ function ProjectListView({ projectList, onUpdate, onRemove, sortConfig, onSort, 
   };
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h(ImportDuplicateModal, {
+      pending: pendingImport,
+      onCancel: () => setPendingImport(null),
+      onReplace: () => {
+        const { freshRows, duplicates } = pendingImport;
+        const merged = projectList.map(existingRow => {
+          const dup = duplicates.find(d => d.existing.id === existingRow.id);
+          if (!dup) return existingRow;
+          return { ...existingRow, ...dup.imported, id: existingRow.id, createdBy: existingRow.createdBy };
+        });
+        const finalList = [...merged, ...freshRows];
+        onReplaceAll(finalList);
+        setPendingImport(null);
+        alert(`Import complete \u2014 replaced ${duplicates.length} existing project(s), added ${freshRows.length} new project(s).`);
+      }
+    }),
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Project List"),
@@ -2558,9 +2619,13 @@ function diffStreamSnapshots(prevSnapshots, currSnapshots) {
    narrative: what changed, and what needs unlocking/escalation vs. what's
    worth highlighting as a win or notable shift. */
 async function generateStreamAiAnalysis(streamName, diff, riskContext) {
+  const priorityRiskNames = (riskContext.priorityRiskProjects || []).map(p => `${p.project} (${p.priority})`);
   const fallback = {
     summary: `${diff.added.length} project(s) added, ${diff.updated.length} updated, ${diff.deleted.length} removed since the last report.`,
-    needsAttention: riskContext.delayedProjectNames.length ? riskContext.delayedProjectNames.map(n => `${n} is overdue and not yet closed.`) : [],
+    needsAttention: [
+      ...riskContext.delayedProjectNames.map(n => `${n} is overdue and not yet closed.`),
+      ...priorityRiskNames.map(n => `${n} has no End Date set.`)
+    ],
     highlights: []
   };
   try {
@@ -2572,7 +2637,8 @@ async function generateStreamAiAnalysis(streamName, diff, riskContext) {
       ...diff.updated.map(u => `  - ${u.snapshot.project}: ${u.changes.join("; ") || "minor change"}`),
       `Currently delayed projects: ${riskContext.delayedProjectNames.join(", ") || "none"}`,
       `Currently delayed tasks/to-dos: ${riskContext.delayedTaskCount}`,
-      `Projects by phase right now: completed ${riskContext.completed}, in progress ${riskContext.inProgress}, upcoming kick-off ${riskContext.upcoming}, exploration ${riskContext.exploration}`
+      `Projects by phase right now: completed ${riskContext.completed}, in progress ${riskContext.inProgress}, upcoming kick-off ${riskContext.upcoming}, exploration ${riskContext.exploration}`,
+      `Critical/High priority projects with no End Date set (these can't be scheduled or tracked properly): ${priorityRiskNames.join(", ") || "none"}`
     ];
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -2580,7 +2646,7 @@ async function generateStreamAiAnalysis(streamName, diff, riskContext) {
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 700,
-        system: "You are a delivery-management assistant writing a concise weekly status analysis for one delivery stream. Respond ONLY with a single valid JSON object, no markdown fences, no preamble, matching exactly this shape: {\"summary\": string, \"needsAttention\": string[], \"highlights\": string[]}. \"summary\" is 2-4 sentences on what changed this period. \"needsAttention\" lists short, specific items that need to be unlocked, escalated, or decided on (blockers, overdue items, stalled projects) — empty array if none. \"highlights\" lists short, specific notable wins or important shifts worth calling out — empty array if none. Keep every bullet under 20 words.",
+        system: "You are a delivery-management assistant writing a concise weekly status analysis for one delivery stream. Respond ONLY with a single valid JSON object, no markdown fences, no preamble, matching exactly this shape: {\"summary\": string, \"needsAttention\": string[], \"highlights\": string[]}. \"summary\" is 2-4 sentences on what changed this period. \"needsAttention\" lists short, specific items that need to be unlocked, escalated, or decided on (blockers, overdue items, stalled projects, and any Critical/High priority project missing an End Date) — empty array if none. \"highlights\" lists short, specific notable wins or important shifts worth calling out — empty array if none. Keep every bullet under 20 words.",
         messages: [{ role: "user", content: promptLines.join("\n") }]
       })
     });
@@ -2657,13 +2723,19 @@ function DashboardReportView({ projectList, records, currentUser, weeklyReports,
         + items.reduce((sum, ps) => sum + ps.todos.filter(t => isDelayedItem(t, "dueDate")).length, 0);
       const completedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(isDoneItem).length, 0)
         + items.reduce((sum, ps) => sum + ps.todos.filter(isDoneItem).length, 0);
+      const priorityRiskProjects = items
+        .filter(ps => {
+          const p = norm(ps.row.priority).toLowerCase();
+          return (p === "critical" || p === "high") && !norm(ps.row.endDate);
+        })
+        .map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", priority: ps.row.priority }));
       return {
         streamName, projectCount: total,
         completed, inProgress, upcoming, exploration, total,
         pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
         overallPct: pct(completed),
         atRisk: items.filter(ps => ps.riskLabel),
-        delayedTaskCount, completedTaskCount
+        delayedTaskCount, completedTaskCount, priorityRiskProjects
       };
     }).sort((a, b) => a.streamName.localeCompare(b.streamName));
   }, [projectStats, todayISO]);
@@ -2685,7 +2757,8 @@ function DashboardReportView({ projectList, records, currentUser, weeklyReports,
         const riskContext = {
           delayedProjectNames: sr.atRisk.map(ps => ps.row.project || "Untitled"),
           delayedTaskCount: sr.delayedTaskCount,
-          completed: sr.completed, inProgress: sr.inProgress, upcoming: sr.upcoming, exploration: sr.exploration
+          completed: sr.completed, inProgress: sr.inProgress, upcoming: sr.upcoming, exploration: sr.exploration,
+          priorityRiskProjects: sr.priorityRiskProjects
         };
         const aiAnalysis = await generateStreamAiAnalysis(sr.streamName, diff, riskContext);
         newReports.push({
@@ -2696,6 +2769,7 @@ function DashboardReportView({ projectList, records, currentUser, weeklyReports,
             deleted: diff.deleted.map(s => s.project || "Untitled"),
             updated: diff.updated.map(u => ({ project: u.snapshot.project || "Untitled", changes: u.changes }))
           },
+          priorityRiskProjects: sr.priorityRiskProjects,
           aiAnalysis,
           snapshots: currSnapshots
         });
@@ -2722,7 +2796,6 @@ function DashboardReportView({ projectList, records, currentUser, weeklyReports,
       : h("div", null,
           h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
             h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
-            h(StatCard, { label:"Overall Progress", value:`${overall.pct}%`, color: overall.pct === 100 ? "#166534" : "#1E3A5F", sub:"% of projects at Phase 6/60/61/62" }),
             h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61/62" : "None right now" }),
             h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:"% of projects at Phase 6/60/61/62" })
           ),
@@ -2809,6 +2882,18 @@ function WeeklyReportDetailModal({ report, onClose }) {
           )
         ),
         s.addedCount === 0 && s.updatedCount === 0 && s.deletedCount === 0 && h("div", { style:{ fontSize:12, color:"#94A3B8" } }, "No changes detected since the previous report for this stream.")
+      ),
+
+      h("div", { style:{ marginTop:18, paddingTop:16, borderTop:"1px solid #F1F5F9" } },
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#334155", marginBottom:8 } }, "Critical/High Priority \u2014 Missing End Date"),
+        (report.priorityRiskProjects && report.priorityRiskProjects.length > 0)
+          ? h("div", { style:{ display:"flex", flexDirection:"column", gap:4 } },
+              report.priorityRiskProjects.map((p, i) => h("div", { key:i, style:{ fontSize:12, color:"#334155", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
+                h("span", null, `${p.project} `, h("span", { style:{ color:"#94A3B8" } }, `(${p.application})`)),
+                h("span", { style:{ color:"#C2410C", fontWeight:600 } }, p.priority)
+              ))
+            )
+          : h("div", { style:{ fontSize:12, color:"#94A3B8" } }, "None \u2014 every Critical/High priority project has an End Date set.")
       ),
 
       h("div", { style:{ marginTop:18, paddingTop:16, borderTop:"1px solid #F1F5F9" } },
@@ -3066,6 +3151,7 @@ function AppRoot() {
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
   const onUpdateProjectRow = (id, field, value) => setProjectList(list => list.map(r => r.id === id ? { ...r, [field]: value } : r));
+  const onReplaceProjectList = newList => setProjectList(newList);
   const onImportProjectRows = rows => setProjectList(list => [
     ...list, ...rows.map(r => ({ ...r, createdBy: currentUser ? currentUser.email : "" }))
   ]);
@@ -3221,7 +3307,7 @@ function AppRoot() {
           })
         : activeView === "list"
         ? h(ProjectListView, {
-            projectList: sortedProjectList, onUpdate: onUpdateProjectRow, onRemove: onRemoveProjectRow,
+            projectList: sortedProjectList, onUpdate: onUpdateProjectRow, onRemove: onRemoveProjectRow, onReplaceAll: onReplaceProjectList,
             sortConfig: plSortConfig, onSort: onPlSort, onImport: onImportProjectRows, onExport: onExportProjectList,
             phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
             subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel,
