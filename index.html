@@ -2255,12 +2255,10 @@ function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser, canAdd
    and the same table chrome, so one generic component renders all of
    them from a column spec. */
 const CR_LOG_COLUMNS = [
-  { key:"crId", label:"CR ID", type:"text" },
   { key:"date", label:"Date", type:"date" },
-  { key:"description", label:"CR Description", type:"text" },
+  { key:"description", label:"CR Description", type:"text", widthFactor:2 },
   { key:"requester", label:"Requester", type:"text" },
   { key:"status", label:"Status", type:"select", options:["Not started","On progress CR","On progress assessment","Development","Done Development","Hold","Cancelled"] },
-  { key:"notes", label:"Notes", type:"text" },
   { key:"link", label:"CR Link", type:"text" },
 ];
 const STAKEHOLDER_COLUMNS = [
@@ -2303,9 +2301,17 @@ const LESSON_LEARNED_COLUMNS = [
 function EditableLogTable({ columns, rows, onAdd, onUpdate, onRemove, currentUser, canAdd, addLabel, lockedNote, showRowNumber = true }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
   const colSpanCount = columns.length + (showRowNumber ? 2 : 1);
+  const hasCustomWidths = columns.some(c => c.widthFactor && c.widthFactor !== 1);
+  const NO_COL_FACTOR = 0.5, ACTION_COL_FACTOR = 0.5;
+  const totalFactor = (showRowNumber ? NO_COL_FACTOR : 0) + columns.reduce((s,c) => s + (c.widthFactor || 1), 0) + ACTION_COL_FACTOR;
   return h("div", null,
     h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12, marginTop:8, marginBottom:16 } },
-      h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+      h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13, tableLayout: hasCustomWidths ? "fixed" : "auto" } },
+        hasCustomWidths && h("colgroup", null,
+          showRowNumber && h("col", { style:{ width:`${(NO_COL_FACTOR/totalFactor)*100}%` } }),
+          columns.map(c => h("col", { key:c.key, style:{ width:`${((c.widthFactor||1)/totalFactor)*100}%` } })),
+          h("col", { style:{ width:`${(ACTION_COL_FACTOR/totalFactor)*100}%` } })
+        ),
         h("thead", null, h("tr", { style:{ background:"#152238" } },
           showRowNumber && h("th", { style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600, width:48 } }, "No"),
           columns.map(c => h("th", { key:c.key, style:{ padding:"10px 10px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, c.label)),
@@ -2532,7 +2538,7 @@ function ProjectBaselineView({
         );
       }
       const LOG_TABLE_MAP = {
-        changeRequest: { columns: CR_LOG_COLUMNS, rows: effChangeRequestRows, onAdd: useDraft ? addChangeRequestRow : () => {}, onUpdate: useDraft ? updateChangeRequestRow : () => {}, onRemove: useDraft ? removeChangeRequestRow : () => {}, showRowNumber: false },
+        changeRequest: { columns: CR_LOG_COLUMNS, rows: effChangeRequestRows, onAdd: useDraft ? addChangeRequestRow : () => {}, onUpdate: useDraft ? updateChangeRequestRow : () => {}, onRemove: useDraft ? removeChangeRequestRow : () => {} },
         stakeholder: { columns: STAKEHOLDER_COLUMNS, rows: effStakeholderRows, onAdd: useDraft ? addStakeholderRow : () => {}, onUpdate: useDraft ? updateStakeholderRow : () => {}, onRemove: useDraft ? removeStakeholderRow : () => {} },
         benefit: { columns: BENEFIT_COLUMNS, rows: effBenefitRows, onAdd: useDraft ? addBenefitRow : () => {}, onUpdate: useDraft ? updateBenefitRow : () => {}, onRemove: useDraft ? removeBenefitRow : () => {} },
         dependency: { columns: DEPENDENCY_COLUMNS, rows: effDependencyRows, onAdd: useDraft ? addDependencyRow : () => {}, onUpdate: useDraft ? updateDependencyRow : () => {}, onRemove: useDraft ? removeDependencyRow : () => {} },
@@ -2807,7 +2813,7 @@ function DashboardReportView({ projectList, records }) {
       ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "No projects yet. Add one via the \"Create Project\" menu.")
       : h("div", null,
           h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
-            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:"% of projects at Phase 6/60/61/62" }),
+            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.totalProjects} projects at Hypercare/Closing/Cancelled/Hold Phase` }),
             h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
             h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61/62" : "None right now" })
           ),
