@@ -80,12 +80,15 @@ async function fetchRemoteState() {
 
 async function pushRemoteState(partial) {
   if (!supabaseClient) return { ok:false, updatedAt:null };
-  const updatedAt = new Date().toISOString();
-  const row = { id: SUPABASE_ROW_ID, updated_at: updatedAt };
+  // updated_at is NOT set here — a database trigger stamps it with the
+  // server's clock, so ordering between competing writes (from different
+  // tabs/users, possibly out of order over the network) is decided by the
+  // database, not by comparing client clocks that can be skewed or racy.
+  const row = { id: SUPABASE_ROW_ID };
   Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (partial[stateKey] !== undefined) row[col] = partial[stateKey]; });
-  const { error } = await supabaseClient.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" });
+  const { data, error } = await supabaseClient.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" }).select("updated_at").maybeSingle();
   if (error) console.error("Supabase save failed:", error.message || error);
-  return { ok: !error, updatedAt };
+  return { ok: !error, updatedAt: (data && data.updated_at) || null };
 }
 
 /* Real-time events can arrive out of order (reconnect backlogs, network
@@ -3285,8 +3288,14 @@ function AppRoot() {
             setRemoteSaveFailed(!result.ok);
             // Mark our own write as the latest known state so a late echo
             // of it (or anything older, like a stale reconnect backlog
-            // event) can never be applied on top of it afterwards.
-            if (result.ok && result.updatedAt) lastAppliedUpdatedAt.current = result.updatedAt;
+            // event) can never be applied on top of it afterwards. Guard
+            // against regressing if an older push's response resolves
+            // after a newer one (out-of-order network completion).
+            if (result.ok && result.updatedAt) {
+              if (!lastAppliedUpdatedAt.current || result.updatedAt > lastAppliedUpdatedAt.current) {
+                lastAppliedUpdatedAt.current = result.updatedAt;
+              }
+            }
           });
       }
     }, 400);
