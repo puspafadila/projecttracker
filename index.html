@@ -83,6 +83,7 @@ async function pushRemoteState(partial) {
   const row = { id: SUPABASE_ROW_ID, updated_at: new Date().toISOString() };
   Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (partial[stateKey] !== undefined) row[col] = partial[stateKey]; });
   const { error } = await supabaseClient.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" });
+  if (error) console.error("Supabase save failed:", error.message || error);
   return !error;
 }
 
@@ -1500,7 +1501,7 @@ function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChan
   );
 }
 
-function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser, onLogout }) {
+function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser, onLogout, remoteSaveFailed }) {
   const visibleNavItems = (currentUser && currentUser.role === "superAdmin")
     ? NAV_ITEMS
     : NAV_ITEMS.filter(it => it.key === "report" || it.key === "create-project" || it.key === "list");
@@ -1580,8 +1581,10 @@ function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser,
         h("div", { style:{ color:"#fff", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, currentUser.email),
         h("div", { style:{ color:"#8B9BB4", fontSize:11, marginTop:2 } }, roleLabel),
         h("div", { style:{ display:"flex", alignItems:"center", gap:5, marginTop:6 } },
-          h("span", { style:{ width:6, height:6, borderRadius:999, background: supabaseClient ? "#4ADE80" : "#F59E0B", flexShrink:0 } }),
-          h("span", { style:{ color:"#8B9BB4", fontSize:10 } }, supabaseClient ? "Connected \u2014 real-time" : "Local mode (not connected)")
+          h("span", { style:{ width:6, height:6, borderRadius:999, background: remoteSaveFailed ? "#EF4444" : supabaseClient ? "#4ADE80" : "#F59E0B", flexShrink:0 } }),
+          h("span", { style:{ color: remoteSaveFailed ? "#FCA5A5" : "#8B9BB4", fontSize:10 } },
+            remoteSaveFailed ? "Save failed \u2014 check connection" : supabaseClient ? "Connected \u2014 real-time" : "Local mode (not connected)"
+          )
         )
       ),
       h("button", {
@@ -3102,6 +3105,9 @@ function AppRoot() {
   const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
   const [plSortConfig, setPlSortConfig] = useState({ key:null, dir:"asc" });
   const [saveStatus, setSaveStatus] = useState("idle");
+  const [remoteSaveFailed, setRemoteSaveFailed] = useState(false);
+  const [saveErrorDismissed, setSaveErrorDismissed] = useState(false);
+  useEffect(() => { if (remoteSaveFailed) setSaveErrorDismissed(false); }, [remoteSaveFailed]);
   const mounted = useRef(false);
   const picListId = "pic-suggest";
 
@@ -3262,7 +3268,8 @@ function AppRoot() {
       });
       setSaveStatus(ok ? "saved" : "error");
       if (supabaseClient && remoteHydrated.current) {
-        pushRemoteState({ projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports });
+        pushRemoteState({ projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports })
+          .then(remoteOk => setRemoteSaveFailed(!remoteOk));
       }
     }, 400);
     return () => clearTimeout(t);
@@ -3416,11 +3423,21 @@ function AppRoot() {
     return h(LoginView, { onLogin });
   }
 
-  return h("div", { style:{ display:"flex", minHeight:"100vh", background:"#F3F5F8" } },
+  return h("div", null,
+    remoteSaveFailed && !saveErrorDismissed && h("div", {
+      style:{ position:"sticky", top:0, zIndex:150, background:"#7F1D1D", color:"#fff", padding:"10px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:14, fontSize:13, flexWrap:"wrap" }
+    },
+      h("div", null, h("b", null, "\u26A0 Save failed \u2014 "), "Your latest changes could not be saved to the shared database. They're only stored on this device until this is resolved. Check your connection or contact your admin."),
+      h("button", {
+        onClick: () => setSaveErrorDismissed(true),
+        style:{ background:"none", border:"1px solid rgba(255,255,255,0.4)", borderRadius:6, color:"#fff", padding:"4px 12px", cursor:"pointer", fontSize:12, flexShrink:0 }
+      }, "Dismiss")
+    ),
+    h("div", { style:{ display:"flex", minHeight:"100vh", background:"#F3F5F8" } },
     h(UnsavedChangesModal, {
       open: pendingNavigation !== null, onSave: onConfirmSaveAndContinue, onDiscard: onConfirmDiscardAndContinue, onCancel: onCancelNavigation
     }),
-    h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout }),
+    h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout, remoteSaveFailed }),
     h("div", { style:{ flex:1, minWidth:0 } },
       activeView === "dashboard-report"
         ? h(DashboardReportView, { projectList: sortedProjectList, records })
@@ -3472,6 +3489,7 @@ function AppRoot() {
             ? h(ChangeManagementView, { ...changeManagementViewProps, readOnly: true })
             : h(DocumentPlaceholderView, { title: PLACEHOLDER_TITLES[activeView] }))
         : null
+    )
     )
   );
 }
