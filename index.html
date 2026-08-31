@@ -102,6 +102,33 @@ function subscribeRemoteState(onChange) {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const norm = s => (s || "").trim();
+/* Turns a spreadsheet date value into an ISO "YYYY-MM-DD" string.
+   Handles real Excel date cells (already a JS Date via cellDates:true),
+   ISO-style text, and day-first text like "31/08/2026" or "31-08-2026"
+   (the common non-US convention) explicitly — JS's native Date parser
+   gets those wrong (reads them as month/day and silently fails when the
+   day is > 12). Falls back to native parsing for anything else (e.g.
+   "31 Aug 2026"). Returns "" if nothing usable is found.
+*/
+function parseFlexibleDate(v) {
+  if (!v) return "";
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return "";
+    const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,"0"), d = String(v.getDate()).padStart(2,"0");
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/); // YYYY-MM-DD / YYYY/MM/DD
+  if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/); // DD-MM-YYYY / DD/MM/YYYY (day-first)
+  if (m) {
+    const [, a, b, y] = m;
+    return `${y}-${b.padStart(2,"0")}-${a.padStart(2,"0")}`;
+  }
+  const d2 = new Date(s);
+  return isNaN(d2.getTime()) ? "" : d2.toISOString().slice(0,10);
+}
+
 const makeKey = (application, project) => `${norm(application).toLowerCase()}::${norm(project).toLowerCase()}`;
 
 /* ---------- icons ---------- */
@@ -493,8 +520,7 @@ const PL_COL_KEYS = PL_COLS.map(c => c.key);
 const PL_COL_BY_KEY = Object.fromEntries(PL_COLS.map(c => [c.key, c]));
 const DEFAULT_PL_COLUMN_ORDER = PL_COLS.map(c => c.key);
 
-function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columns, showGantt, currentUser }) {
-  const [filters, setFilters] = useState({});
+function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columns, showGantt, currentUser, filters = {}, onFiltersChange }) {
   const ganttRange = useMemo(() => computeGanttRange(rows), [rows]);
   const weekCells = useMemo(() => buildWeekCells(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
   const monthTicks = useMemo(() => buildMonthTicks(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
@@ -509,8 +535,8 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseO
   const masterOptions = { mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions };
 
   const columnOptions = useMemo(() => buildColumnOptions(rows, colKeys), [rows, colKeys]);
-  const onFilterChange = (colKey, selected) => setFilters(f => ({ ...f, [colKey]: selected }));
-  const clearAllFilters = () => setFilters({});
+  const onFilterChange = (colKey, selected) => onFiltersChange({ ...filters, [colKey]: selected });
+  const clearAllFilters = () => onFiltersChange({});
   const filteredRows = useMemo(() => rows.filter(r => rowPassesFilters(r, filters, colKeys)), [rows, filters, colKeys]);
   const activeFilterCount = Object.values(filters).filter(v => Array.isArray(v)).length;
 
@@ -600,7 +626,7 @@ function ImportDuplicateModal({ pending, onCancel, onReplace }) {
   );
 }
 
-function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser }) {
+function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortConfig, onSort, onImport, onExport, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard, columnOrder, hiddenColumns, onToggleColumnVisibility, onReorderColumn, ganttHidden, onToggleGantt, currentUser, filters, onFiltersChange }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
   const [pendingImport, setPendingImport] = useState(null);
@@ -623,15 +649,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
           }
           return "";
         };
-        const toISODate = v => {
-          if (!v) return "";
-          if (v instanceof Date) {
-            const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,"0"), d = String(v.getDate()).padStart(2,"0");
-            return `${y}-${m}-${d}`;
-          }
-          const d2 = new Date(v);
-          return isNaN(d2.getTime()) ? "" : d2.toISOString().slice(0,10);
-        };
+        const toISODate = parseFlexibleDate;
         const imported = rows.map(row => {
           const obj = { id: uid() };
           PL_COLS.forEach(c => {
@@ -759,7 +777,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         rows: projectList, onUpdate, onRemove, sortConfig, onSort,
         phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions, onOpenWizard,
         columns: columnOrder.filter(k => !hiddenColumns.includes(k) && PL_COL_BY_KEY[k]).map(k => PL_COL_BY_KEY[k]),
-        showGantt: !ganttHidden, currentUser
+        showGantt: !ganttHidden, currentUser, filters, onFiltersChange
       })
     )
   );
@@ -1240,15 +1258,7 @@ function DetailView({
           }
           return "";
         };
-        const toISODate = v => {
-          if (!v) return "";
-          if (v instanceof Date) {
-            const y = v.getFullYear(), m = String(v.getMonth()+1).padStart(2,"0"), d = String(v.getDate()).padStart(2,"0");
-            return `${y}-${m}-${d}`;
-          }
-          const d2 = new Date(v);
-          return isNaN(d2.getTime()) ? "" : d2.toISOString().slice(0,10);
-        };
+        const toISODate = parseFlexibleDate;
         const imported = rows.map((row, idx) => ({
           id: uid(),
           no: String(pick(row,"No") || idx+1),
@@ -1380,10 +1390,12 @@ function DetailView({
    SIDEBAR + ROOT APP
    ========================================================================= */
 const NAV_ITEMS = [
-  { key:"dashboard-report", label:"Dashboard Report", icon:Icon.chart },
-  { key:"weekly-report", label:"Weekly Report", icon:Icon.checklist },
   { key:"create-project", label:"Create Project", icon:Icon.plus },
   { key:"list", label:"Project List", icon:Icon.grid },
+  { key:"report", label:"Report", icon:Icon.chart, children:[
+    { key:"dashboard-report", label:"Dashboard Report" },
+    { key:"weekly-report", label:"Weekly Report" },
+  ] },
   { key:"document", label:"View Documents", icon:Icon.file, children:[
     { key:"detail", label:"Timeline" },
     { key:"doc-baseline", label:"PMO Documents" },
@@ -1491,9 +1503,9 @@ function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChan
 function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser, onLogout }) {
   const visibleNavItems = (currentUser && currentUser.role === "superAdmin")
     ? NAV_ITEMS
-    : NAV_ITEMS.filter(it => it.key === "dashboard-report" || it.key === "weekly-report" || it.key === "create-project" || it.key === "list");
+    : NAV_ITEMS.filter(it => it.key === "report" || it.key === "create-project" || it.key === "list");
   const activeGroup = visibleNavItems.find(it => it.children && it.children.some(c => c.key === active));
-  const [expandedGroups, setExpandedGroups] = useState({ document: true });
+  const [expandedGroups, setExpandedGroups] = useState({ report: true, document: true });
   const toggleGroup = key => setExpandedGroups(g => ({ ...g, [key]: !g[key] }));
   const onGroupHeaderClick = key => {
     if (collapsed) { onToggleCollapse(); return; }
@@ -2664,26 +2676,111 @@ async function generateStreamAiAnalysis(streamName, diff, riskContext) {
   }
 }
 
-function DashboardReportView({ projectList, records, currentUser, weeklyReports, onSaveWeeklyReports }) {
-  const todayISO = new Date().toISOString().slice(0,10);
-  const [generating, setGenerating] = useState(false);
-  const canGenerate = !!(currentUser && currentUser.role === "superAdmin");
+function GenerateReportStreamModal({ open, streamOptions, picked, onToggle, onSelectAll, onClear, projectCountFor, onCancel, onConfirm }) {
+  if (!open) return null;
+  const pickedCount = picked.size;
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onCancel
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, padding:24, maxWidth:420, width:"100%", maxHeight:"80vh", display:"flex", flexDirection:"column", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238", marginBottom:4 } }, "Generate Report"),
+      h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:14 } }, "Choose which stream(s) to generate a report for."),
+      h("div", { style:{ display:"flex", gap:14, marginBottom:10, fontSize:12 } },
+        h("button", { onClick:onSelectAll, style:{ background:"none", border:"none", color:"#1E3A5F", fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Select all"),
+        h("button", { onClick:onClear, style:{ background:"none", border:"none", color:"#1E3A5F", fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Clear")
+      ),
+      h("div", { style:{ overflow:"auto", border:"1px solid #E2E8F0", borderRadius:9, marginBottom:18 } },
+        streamOptions.length === 0
+          ? h("div", { style:{ padding:"20px 14px", fontSize:12, color:"#94A3B8", textAlign:"center" } }, "No streams defined in Master Data Management yet.")
+          : streamOptions.map(name => {
+              const count = projectCountFor(name);
+              const checked = picked.has(name);
+              return h("label", {
+                key:name,
+                style:{ display:"flex", alignItems:"center", gap:9, padding:"9px 12px", borderBottom:"1px solid #F1F5F9", cursor:"pointer", fontSize:13, color: count === 0 ? "#94A3B8" : "#334155" }
+              },
+                h("input", { type:"checkbox", checked, onChange:() => onToggle(name), style:{ flexShrink:0 } }),
+                h("span", { style:{ flex:1 } }, name),
+                h("span", { style:{ fontSize:11, color:"#94A3B8" } }, `${count} project${count === 1 ? "" : "s"}`)
+              );
+            })
+      ),
+      h("div", { style:{ display:"flex", gap:10, justifyContent:"flex-end", flexWrap:"wrap" } },
+        h("button", { className:"btn", onClick:onCancel }, "Cancel"),
+        h("button", { className:"btn btn-primary", onClick:onConfirm, disabled: pickedCount === 0 }, `Generate (${pickedCount})`)
+      )
+    )
+  );
+}
 
-  const projectStats = useMemo(() => {
-    return (projectList || []).map(row => {
-      const key = makeKey(row.application, row.project);
-      const rec = records[key] || {};
-      const tasks = rec.tasks || [], todos = rec.todos || [];
-      const progress = computeTimelineProgress(tasks, todos);
-      const completed = isCompletedPhase(row.phase);
-      let riskLabel = null;
-      if (row.endDate && !completed) {
-        const daysDiff = Math.round((new Date(row.endDate + "T00:00:00") - new Date(todayISO + "T00:00:00")) / 86400000);
-        if (daysDiff < 0) riskLabel = `Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? "" : "s"}`;
-      }
-      return { row, progress, completed, riskLabel, tasks, todos };
-    });
-  }, [projectList, records, todayISO]);
+/* Shared by Dashboard Report and Weekly Report (both need the same
+   per-project and per-stream rollups — the former to display them, the
+   latter to know what to generate). */
+function computeProjectStats(projectList, records, todayISO) {
+  return (projectList || []).map(row => {
+    const key = makeKey(row.application, row.project);
+    const rec = records[key] || {};
+    const tasks = rec.tasks || [], todos = rec.todos || [];
+    const progress = computeTimelineProgress(tasks, todos);
+    const completed = isCompletedPhase(row.phase);
+    let riskLabel = null;
+    if (row.endDate && !completed) {
+      const daysDiff = Math.round((new Date(row.endDate + "T00:00:00") - new Date(todayISO + "T00:00:00")) / 86400000);
+      if (daysDiff < 0) riskLabel = `Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? "" : "s"}`;
+    }
+    return { row, progress, completed, riskLabel, tasks, todos };
+  });
+}
+
+function computeStreamReports(projectStats, todayISO) {
+  const groups = {};
+  projectStats.forEach(ps => {
+    const s = norm(ps.row.stream) || "(No Stream)";
+    (groups[s] = groups[s] || []).push(ps);
+  });
+  const phaseCode = ps => { const m = norm(ps.row.phase).match(/^(\d+)/); return m ? m[1] : null; };
+  const isDelayedItem = (item, dateField) => {
+    const d = item[dateField];
+    if (!d || d >= todayISO) return false;
+    const st = norm(item.status).toLowerCase();
+    return st !== "done" && st !== "cancelled";
+  };
+  return Object.entries(groups).map(([streamName, items]) => {
+    const total = items.length;
+    const completed = items.filter(ps => isCompletedPhase(ps.row.phase)).length;
+    const inProgress = items.filter(ps => ["3","4","5"].includes(phaseCode(ps))).length;
+    const upcoming = items.filter(ps => ["1","2"].includes(phaseCode(ps))).length;
+    const exploration = items.filter(ps => phaseCode(ps) === "0").length;
+    const pct = n => total ? Math.round((n / total) * 100) : 0;
+    const isDoneItem = t => norm(t.status).toLowerCase() === "done";
+    const delayedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(t => isDelayedItem(t, "endDate")).length, 0)
+      + items.reduce((sum, ps) => sum + ps.todos.filter(t => isDelayedItem(t, "dueDate")).length, 0);
+    const completedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(isDoneItem).length, 0)
+      + items.reduce((sum, ps) => sum + ps.todos.filter(isDoneItem).length, 0);
+    const priorityRiskProjects = items
+      .filter(ps => {
+        const p = norm(ps.row.priority).toLowerCase();
+        return (p === "critical" || p === "high") && !norm(ps.row.endDate);
+      })
+      .map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", priority: ps.row.priority }));
+    return {
+      streamName, projectCount: total,
+      completed, inProgress, upcoming, exploration, total,
+      pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
+      overallPct: pct(completed),
+      atRisk: items.filter(ps => ps.riskLabel),
+      delayedTaskCount, completedTaskCount, priorityRiskProjects
+    };
+  }).sort((a, b) => a.streamName.localeCompare(b.streamName));
+}
+
+function DashboardReportView({ projectList, records }) {
+  const todayISO = new Date().toISOString().slice(0,10);
+  const projectStats = useMemo(() => computeProjectStats(projectList, records, todayISO), [projectList, records, todayISO]);
 
   const overall = useMemo(() => {
     const totalProjects = projectStats.length;
@@ -2698,106 +2795,21 @@ function DashboardReportView({ projectList, records, currentUser, weeklyReports,
     };
   }, [projectStats]);
 
-  const streamReports = useMemo(() => {
-    const groups = {};
-    projectStats.forEach(ps => {
-      const s = norm(ps.row.stream) || "(No Stream)";
-      (groups[s] = groups[s] || []).push(ps);
-    });
-    const phaseCode = ps => { const m = norm(ps.row.phase).match(/^(\d+)/); return m ? m[1] : null; };
-    const isDelayedItem = (item, dateField) => {
-      const d = item[dateField];
-      if (!d || d >= todayISO) return false;
-      const st = norm(item.status).toLowerCase();
-      return st !== "done" && st !== "cancelled";
-    };
-    return Object.entries(groups).map(([streamName, items]) => {
-      const total = items.length;
-      const completed = items.filter(ps => isCompletedPhase(ps.row.phase)).length;
-      const inProgress = items.filter(ps => ["3","4","5"].includes(phaseCode(ps))).length;
-      const upcoming = items.filter(ps => ["1","2"].includes(phaseCode(ps))).length;
-      const exploration = items.filter(ps => phaseCode(ps) === "0").length;
-      const pct = n => total ? Math.round((n / total) * 100) : 0;
-      const isDoneItem = t => norm(t.status).toLowerCase() === "done";
-      const delayedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(t => isDelayedItem(t, "endDate")).length, 0)
-        + items.reduce((sum, ps) => sum + ps.todos.filter(t => isDelayedItem(t, "dueDate")).length, 0);
-      const completedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(isDoneItem).length, 0)
-        + items.reduce((sum, ps) => sum + ps.todos.filter(isDoneItem).length, 0);
-      const priorityRiskProjects = items
-        .filter(ps => {
-          const p = norm(ps.row.priority).toLowerCase();
-          return (p === "critical" || p === "high") && !norm(ps.row.endDate);
-        })
-        .map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", priority: ps.row.priority }));
-      return {
-        streamName, projectCount: total,
-        completed, inProgress, upcoming, exploration, total,
-        pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
-        overallPct: pct(completed),
-        atRisk: items.filter(ps => ps.riskLabel),
-        delayedTaskCount, completedTaskCount, priorityRiskProjects
-      };
-    }).sort((a, b) => a.streamName.localeCompare(b.streamName));
-  }, [projectStats, todayISO]);
-
-  const handleGenerateReport = async () => {
-    if (generating || streamReports.length === 0) return;
-    setGenerating(true);
-    try {
-      const generatedDate = new Date().toISOString().slice(0,10);
-      const newReports = [];
-      for (const sr of streamReports) {
-        const items = projectStats.filter(ps => (norm(ps.row.stream) || "(No Stream)") === sr.streamName);
-        const currSnapshots = items.map(ps => buildProjectSnapshot(ps.row, records));
-        const prevForStream = weeklyReports
-          .filter(r => r.stream === sr.streamName)
-          .sort((a, b) => b.generatedDate.localeCompare(a.generatedDate));
-        const prevSnapshots = prevForStream.length ? prevForStream[0].snapshots : [];
-        const diff = diffStreamSnapshots(prevSnapshots, currSnapshots);
-        const riskContext = {
-          delayedProjectNames: sr.atRisk.map(ps => ps.row.project || "Untitled"),
-          delayedTaskCount: sr.delayedTaskCount,
-          completed: sr.completed, inProgress: sr.inProgress, upcoming: sr.upcoming, exploration: sr.exploration,
-          priorityRiskProjects: sr.priorityRiskProjects
-        };
-        const aiAnalysis = await generateStreamAiAnalysis(sr.streamName, diff, riskContext);
-        newReports.push({
-          id: uid(), generatedDate, stream: sr.streamName, generatedBy: currentUser ? currentUser.email : "",
-          diffSummary: {
-            addedCount: diff.added.length, updatedCount: diff.updated.length, deletedCount: diff.deleted.length,
-            added: diff.added.map(s => s.project || "Untitled"),
-            deleted: diff.deleted.map(s => s.project || "Untitled"),
-            updated: diff.updated.map(u => ({ project: u.snapshot.project || "Untitled", changes: u.changes }))
-          },
-          priorityRiskProjects: sr.priorityRiskProjects,
-          aiAnalysis,
-          snapshots: currSnapshots
-        });
-      }
-      onSaveWeeklyReports(newReports);
-    } finally {
-      setGenerating(false);
-    }
-  };
+  const streamReports = useMemo(() => computeStreamReports(projectStats, todayISO), [projectStats, todayISO]);
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
-      h("div", null,
-        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Dashboard Report"),
-        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "High-level progress overview across all streams \u2014 completion, in-progress work, and delivery risk.")
-      ),
-      canGenerate && h("button", {
-        className:"btn btn-primary", onClick:handleGenerateReport, disabled:generating || projectStats.length === 0
-      }, generating ? "Generating\u2026" : "Generate Report")
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Dashboard Report"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "High-level progress overview across all streams \u2014 completion, in-progress work, and delivery risk.")
     ),
 
     projectStats.length === 0
       ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "No projects yet. Add one via the \"Create Project\" menu.")
       : h("div", null,
           h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
+            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:"% of projects at Phase 6/60/61/62" }),
             h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
-            h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61/62" : "None right now" }),
-            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:"% of projects at Phase 6/60/61/62" })
+            h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61/62" : "None right now" })
           ),
 
           streamReports.map(sr => h("div", { key:sr.streamName, className:"card", style:{ marginBottom:16 } },
@@ -2914,34 +2926,134 @@ function WeeklyReportDetailModal({ report, onClose }) {
   );
 }
 
-function WeeklyReportView({ weeklyReports }) {
+function WeeklyReportView({ weeklyReports, currentUser, onDeleteWeeklyReport, projectList, records, onSaveWeeklyReports, streamMasterOptions }) {
   const [selected, setSelected] = useState(null);
   const sorted = useMemo(() => [...(weeklyReports || [])].sort((a, b) => b.generatedDate.localeCompare(a.generatedDate)), [weeklyReports]);
+  const canDelete = !!(currentUser && currentUser.role === "superAdmin");
+  const canGenerate = !!currentUser;
+
+  const todayISO = new Date().toISOString().slice(0,10);
+  const [generating, setGenerating] = useState(false);
+  const [showStreamPicker, setShowStreamPicker] = useState(false);
+  const [pickedStreams, setPickedStreams] = useState(new Set());
+
+  const projectStats = useMemo(() => computeProjectStats(projectList, records, todayISO), [projectList, records, todayISO]);
+  const streamReports = useMemo(() => computeStreamReports(projectStats, todayISO), [projectStats, todayISO]);
+
+  // Every stream defined in Master Data Management, plus "(No Stream)" if
+  // any project actually has no stream set — this is what the picker
+  // offers, independent of whether a stream currently has projects.
+  const allStreamOptions = useMemo(() => {
+    const fromMaster = (streamMasterOptions || []).map(s => norm(s)).filter(Boolean);
+    const set = new Set(fromMaster);
+    if (streamReports.some(sr => sr.streamName === "(No Stream)")) set.add("(No Stream)");
+    streamReports.forEach(sr => set.add(sr.streamName)); // in case a project uses a stream no longer in Master Data
+    return [...set].sort((a, b) => a === "(No Stream)" ? 1 : b === "(No Stream)" ? -1 : a.localeCompare(b));
+  }, [streamMasterOptions, streamReports]);
+
+  const projectCountFor = name => { const sr = streamReports.find(s => s.streamName === name); return sr ? sr.projectCount : 0; };
+
+  const openStreamPicker = () => {
+    // Default to whichever streams currently have projects — generating
+    // for an empty stream has nothing to report on.
+    setPickedStreams(new Set(streamReports.map(sr => sr.streamName)));
+    setShowStreamPicker(true);
+  };
+  const toggleStream = name => setPickedStreams(prev => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  });
+
+  const handleGenerateReport = async targetStreamNames => {
+    const targets = streamReports.filter(sr => targetStreamNames.has(sr.streamName));
+    if (generating || targets.length === 0) return;
+    setGenerating(true);
+    try {
+      const generatedDate = new Date().toISOString().slice(0,10);
+      const newReports = [];
+      for (const sr of targets) {
+        const items = projectStats.filter(ps => (norm(ps.row.stream) || "(No Stream)") === sr.streamName);
+        const currSnapshots = items.map(ps => buildProjectSnapshot(ps.row, records));
+        const prevForStream = weeklyReports
+          .filter(r => r.stream === sr.streamName)
+          .sort((a, b) => b.generatedDate.localeCompare(a.generatedDate));
+        const prevSnapshots = prevForStream.length ? prevForStream[0].snapshots : [];
+        const diff = diffStreamSnapshots(prevSnapshots, currSnapshots);
+        const riskContext = {
+          delayedProjectNames: sr.atRisk.map(ps => ps.row.project || "Untitled"),
+          delayedTaskCount: sr.delayedTaskCount,
+          completed: sr.completed, inProgress: sr.inProgress, upcoming: sr.upcoming, exploration: sr.exploration,
+          priorityRiskProjects: sr.priorityRiskProjects
+        };
+        const aiAnalysis = await generateStreamAiAnalysis(sr.streamName, diff, riskContext);
+        newReports.push({
+          id: uid(), generatedDate, stream: sr.streamName, generatedBy: currentUser ? currentUser.email : "",
+          diffSummary: {
+            addedCount: diff.added.length, updatedCount: diff.updated.length, deletedCount: diff.deleted.length,
+            added: diff.added.map(s => s.project || "Untitled"),
+            deleted: diff.deleted.map(s => s.project || "Untitled"),
+            updated: diff.updated.map(u => ({ project: u.snapshot.project || "Untitled", changes: u.changes }))
+          },
+          priorityRiskProjects: sr.priorityRiskProjects,
+          aiAnalysis,
+          snapshots: currSnapshots
+        });
+      }
+      onSaveWeeklyReports(newReports);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
-    h("div", { style:{ marginBottom:20 } },
-      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Weekly Report"),
-      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "History of generated reports per stream. Click a row to see what changed and what needs attention.")
+    h(GenerateReportStreamModal, {
+      open: showStreamPicker, streamOptions: allStreamOptions, picked: pickedStreams, onToggle: toggleStream,
+      onSelectAll: () => setPickedStreams(new Set(allStreamOptions)),
+      onClear: () => setPickedStreams(new Set()),
+      projectCountFor,
+      onCancel: () => setShowStreamPicker(false),
+      onConfirm: () => { setShowStreamPicker(false); handleGenerateReport(pickedStreams); }
+    }),
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
+      h("div", null,
+        h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Weekly Report"),
+        h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "History of generated reports per stream. Click a row to see what changed and what needs attention.")
+      ),
+      canGenerate && h("button", {
+        className:"btn btn-primary", onClick:openStreamPicker, disabled:generating || projectStats.length === 0
+      }, generating ? "Generating\u2026" : "Generate Report")
     ),
 
     h(WeeklyReportDetailModal, { report: selected, onClose: () => setSelected(null) }),
 
     h("div", { className:"card", style:{ padding:16 } },
       sorted.length === 0
-        ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No reports generated yet. Use "Generate Report" on the Dashboard Report page.')
+        ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No reports generated yet. Click "Generate Report" above.')
         : h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
             h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
               h("thead", null, h("tr", { style:{ background:"#152238" } },
                 h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Generated Date"),
-                h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Stream")
+                h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Stream"),
+                h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Generated By"),
+                h("th", { style:{ width:40, background:"#152238" } })
               )),
               h("tbody", null,
                 sorted.map((r, i) => h("tr", {
-                  key:r.id, onClick:() => setSelected(r),
-                  style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC", cursor:"pointer" }
+                  key:r.id,
+                  style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" }
                 },
-                  h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#334155" } }, r.generatedDate),
-                  h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#1E3A5F", fontWeight:600 } }, r.stream)
+                  h("td", { onClick:() => setSelected(r), style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#334155", cursor:"pointer" } }, r.generatedDate),
+                  h("td", { onClick:() => setSelected(r), style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#1E3A5F", fontWeight:600, cursor:"pointer" } }, r.stream),
+                  h("td", { onClick:() => setSelected(r), style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#64748B", cursor:"pointer" } }, r.generatedBy || "\u2014"),
+                  h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", textAlign:"center" } },
+                    canDelete
+                      ? h("button", {
+                          onClick: e => { e.stopPropagation(); onDeleteWeeklyReport(r.id); },
+                          title:"Delete report", style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex", margin:"0 auto" }
+                        }, h(Icon.trash,{}))
+                      : h("span", { title:"Only Super Admin can delete reports", style:{ color:"#CBD5E1", display:"flex", margin:"0 auto" } }, h(Icon.lock,{}))
+                  )
                 ))
               )
             )
@@ -2978,6 +3090,7 @@ function AppRoot() {
   const [todoHiddenColumns, setTodoHiddenColumns] = useState(stored.todoHiddenColumns || []);
   const [plColumnOrder, setPlColumnOrder] = useState(stored.plColumnOrder || DEFAULT_PL_COLUMN_ORDER);
   const [plHiddenColumns, setPlHiddenColumns] = useState(stored.plHiddenColumns || []);
+  const [plFiltersByUser, setPlFiltersByUser] = useState(stored.plFiltersByUser || {});
   const [taskGanttHidden, setTaskGanttHidden] = useState(!!stored.taskGanttHidden);
   const [plGanttHidden, setPlGanttHidden] = useState(!!stored.plGanttHidden);
   const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
@@ -3126,6 +3239,7 @@ function AppRoot() {
   };
   const onLogout = () => setCurrentUser(null);
   const onSaveWeeklyReports = newReports => setWeeklyReports(list => [...list, ...newReports]);
+  const onDeleteWeeklyReport = id => setWeeklyReports(list => list.filter(r => r.id !== id));
 
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; return; }
@@ -3138,7 +3252,7 @@ function AppRoot() {
         lastApplication: applicationText, lastProject: projectText,
         lastBaselineApplication: baselineApplicationText, lastBaselineProject: baselineProjectText,
         lastCmApplication: cmApplicationText, lastCmProject: cmProjectText,
-        taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden
+        taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden, plFiltersByUser
       });
       setSaveStatus(ok ? "saved" : "error");
       if (supabaseClient && remoteHydrated.current) {
@@ -3146,7 +3260,7 @@ function AppRoot() {
       }
     }, 400);
     return () => clearTimeout(t);
-  }, [currentUser, activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, weeklyReports, sidebarCollapsed, applicationText, projectText, baselineApplicationText, baselineProjectText, cmApplicationText, cmProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden]);
+  }, [currentUser, activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, weeklyReports, sidebarCollapsed, applicationText, projectText, baselineApplicationText, baselineProjectText, cmApplicationText, cmProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden, plFiltersByUser]);
 
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
@@ -3238,6 +3352,13 @@ function AppRoot() {
   };
   const onToggleTaskGantt = () => setTaskGanttHidden(v => !v);
   const onTogglePlGantt = () => setPlGanttHidden(v => !v);
+  // Project List column filters — kept per logged-in user (not shared/reset
+  // between users on the same device) and never cleared by navigation.
+  const plFilters = (currentUser && plFiltersByUser[currentUser.email]) || {};
+  const onPlFiltersChange = newFilters => {
+    if (!currentUser) return;
+    setPlFiltersByUser(prev => ({ ...prev, [currentUser.email]: newFilters }));
+  };
 
   const pics = useMemo(() => {
     const set = new Set();
@@ -3296,9 +3417,9 @@ function AppRoot() {
     h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout }),
     h("div", { style:{ flex:1, minWidth:0 } },
       activeView === "dashboard-report"
-        ? h(DashboardReportView, { projectList: sortedProjectList, records, currentUser, weeklyReports, onSaveWeeklyReports })
+        ? h(DashboardReportView, { projectList: sortedProjectList, records })
         : activeView === "weekly-report"
-        ? h(WeeklyReportView, { weeklyReports })
+        ? h(WeeklyReportView, { weeklyReports, currentUser, onDeleteWeeklyReport, projectList: sortedProjectList, records, onSaveWeeklyReports, streamMasterOptions: masterData.stream })
         : activeView === "create-project"
         ? h(CreateProjectView, {
             form: createProjectForm, onFieldChange: onCreateProjectFieldChange, onSubmit: onSubmitCreateProject,
@@ -3314,7 +3435,8 @@ function AppRoot() {
             onOpenWizard: onOpenProjectWizard,
             columnOrder: plColumnOrder, hiddenColumns: plHiddenColumns,
             onToggleColumnVisibility: onTogglePlColumnVisibility, onReorderColumn: onReorderPlColumn,
-            ganttHidden: plGanttHidden, onToggleGantt: onTogglePlGantt, currentUser
+            ganttHidden: plGanttHidden, onToggleGantt: onTogglePlGantt, currentUser,
+            filters: plFilters, onFiltersChange: onPlFiltersChange
           })
         : activeView === "project-wizard"
         ? h(ProjectWizardView, {
