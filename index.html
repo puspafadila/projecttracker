@@ -43,70 +43,287 @@ function saveState(data) {
   catch { return false; }
 }
 
-/* ---------- Supabase (shared, real-time backend for collaborative data) ----------
-   Fill these in with your own Supabase project's values (Project Settings > API).
-   Leave SUPABASE_URL empty to run in local-only mode (localStorage, no sharing) —
-   the app falls back to that automatically so it still works before you connect it. */
+/* ---------- Supabase (normalized schema — one table per entity) ----------
+   Unlike the original blob-in-one-row design, every project, task, PMO log
+   row, etc. is its own row in its own table, linked by project_id. Saves
+   are scoped to just what changed (e.g. "this project's tasks"), never the
+   whole app — which is what actually fixes the whole-blob overwrite races,
+   not just papers over them with timestamp checks. */
 const SUPABASE_URL = "https://ekfktniicqsifayqgoxj.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVrZmt0bmlpY3FzaWZheXFnb3hqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4Njk4NjAsImV4cCI6MjEwMzQ0NTg2MH0.fW0WAqaQladN4wmNpH4rAgAGc0HvT2zlXCST9YbDUHs";
-const SUPABASE_ROW_ID = "main";
-const SUPABASE_TABLE = "app_state";
 
 const supabaseClient = (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase)
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
-/* The fields that live in Supabase (shared/collaborative data). Everything else
-   — column order, sidebar state, current selections, the login session, etc. —
-   stays local to the device via localStorage, since it's per-user UI state. */
-const SUPABASE_COLUMN_MAP = {
-  projectList: "project_list",
-  records: "records",
-  baselineRecords: "baseline_records",
-  changeManagementRecords: "change_management_records",
-  masterData: "master_data",
-  userManagement: "user_management",
-  weeklyReports: "weekly_reports",
+const PMO_ROW_TABLE_MAP = {
+  changeRequestRows: { table:"change_request_log", cols:{ date:"date", description:"description", requester:"requester", status:"status", link:"link" } },
+  stakeholderRows: { table:"stakeholder_register", cols:{ name:"name", email:"email", role:"role", interest:"interest", communication:"communication" } },
+  benefitRows: { table:"benefit_register", cols:{ date:"date", description:"description", baselineMetrics:"baseline_metrics", targetMetrics:"target_metrics", beneficiaries:"beneficiaries", pic:"pic", status:"status" } },
+  dependencyRows: { table:"dependency_log", cols:{ date:"date", description:"description", pic:"pic", status:"status" } },
+  riskLogRows: { table:"risk_log", cols:{ date:"date", description:"description", impact:"impact", mitigation:"mitigation", pic:"pic", status:"status" } },
+  lessonsLearnedRows: { table:"lessons_learned", cols:{ date:"date", issueSuccess:"issue_success", result:"result", lessonLearned:"lesson_learned" } },
+  documentRows: { table:"pmo_documents", cols:{ docType:"doc_type", description:"description", link:"link" } },
 };
+const CHARTER_COL_MAP = {
+  projectTitle:"project_title", tpo:"tpo", background:"background", objective:"objective",
+  successCriteria:"success_criteria", scope:"scope", outsideScope:"outside_scope", deliverables:"deliverables",
+  benefitAnalysis:"benefit_analysis", timeline:"timeline_milestone", assumptions:"assumptions_constraint",
+  risk:"risk_mitigation", stakeholders:"stakeholders"
+};
+const MASTER_DATA_CATEGORY_MAP = { phase:"phase", mountain:"mountain", stream:"stream", subStream:"sub_stream", applications:"application", deliveryModel:"delivery_model" };
+const MASTER_DATA_CATEGORY_MAP_REV = Object.fromEntries(Object.entries(MASTER_DATA_CATEGORY_MAP).map(([k,v]) => [v,k]));
 
-async function fetchRemoteState() {
+let notifySupabaseResult = null; // (ok: boolean) => void, wired up by AppRoot to flip the "save failed" banner
+function sqError(label, error) {
+  if (error) console.error(`Supabase ${label} failed:`, error.message || error);
+  if (notifySupabaseResult) notifySupabaseResult(!error);
+  return !error;
+}
+
+/* Pulls every table and reconstructs the exact in-memory shape the rest of
+   this app already expects (projectList array, records/baselineRecords/
+   changeManagementRecords keyed by lowercase "application::project", etc.)
+   — so every component below this line is completely unaware the backend
+   changed at all. */
+async function fetchAllFromSupabase() {
   if (!supabaseClient) return null;
-  const { data, error } = await supabaseClient.from(SUPABASE_TABLE).select("*").eq("id", SUPABASE_ROW_ID).maybeSingle();
-  if (error || !data) return null;
-  const out = { updatedAt: data.updated_at || null };
-  Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (data[col] !== undefined) out[stateKey] = data[col]; });
-  return out;
+  const [projectsRes, tasksRes, todosRes, updatesRes, charterRes, cmNotesRes,
+    crRes, stakeholderRes, benefitRes, depRes, riskRes, lessonsRes, docsRes,
+    masterRes, rolesRes, weeklyRes] = await Promise.all([
+    supabaseClient.from("projects").select("*"),
+    supabaseClient.from("tasks").select("*"),
+    supabaseClient.from("todos").select("*"),
+    supabaseClient.from("project_updates").select("*"),
+    supabaseClient.from("project_charter").select("*"),
+    supabaseClient.from("change_management_notes").select("*"),
+    supabaseClient.from("change_request_log").select("*"),
+    supabaseClient.from("stakeholder_register").select("*"),
+    supabaseClient.from("benefit_register").select("*"),
+    supabaseClient.from("dependency_log").select("*"),
+    supabaseClient.from("risk_log").select("*"),
+    supabaseClient.from("lessons_learned").select("*"),
+    supabaseClient.from("pmo_documents").select("*"),
+    supabaseClient.from("master_data_items").select("*"),
+    supabaseClient.from("user_roles").select("*"),
+    supabaseClient.from("weekly_reports").select("*"),
+  ]);
+  const errs = [projectsRes, tasksRes, todosRes, updatesRes, charterRes, cmNotesRes, crRes, stakeholderRes, benefitRes, depRes, riskRes, lessonsRes, docsRes, masterRes, rolesRes, weeklyRes].find(r => r.error);
+  if (errs) { console.error("Supabase fetch failed:", errs.error.message || errs.error); return null; }
+
+  const projects = projectsRes.data || [];
+  const idToKey = {}; // project.id -> "application::project" (lowercase)
+  const idToAppProject = {}; // project.id -> { application, project } (as-typed, for record.application/.project)
+  const projectList = projects.map(p => {
+    idToKey[p.id] = makeKey(p.application || "", p.project || "");
+    idToAppProject[p.id] = { application: p.application || "", project: p.project || "" };
+    return {
+      id: p.id, mountain: p.mountain || "", stream: p.stream || "", subStream: p.sub_stream || "",
+      application: p.application || "", deliveryModel: p.delivery_model || "", project: p.project || "",
+      resource: p.resource || "", startDate: p.start_date || "", endDate: p.end_date || "",
+      tpo: p.tpo || "", deliveryLead: p.delivery_lead || "", priority: p.priority || "", phase: p.phase || "",
+      createdBy: p.created_by || ""
+    };
+  });
+
+  const records = {};
+  const ensureRecord = pid => {
+    const key = idToKey[pid]; if (!key) return null;
+    if (!records[key]) records[key] = { tasks:[], todos:[], updates:[], ...idToAppProject[pid] };
+    return records[key];
+  };
+  (tasksRes.data || []).forEach(t => {
+    const r = ensureRecord(t.project_id); if (!r) return;
+    r.tasks.push({ id:t.id, no:t.no||"", task:t.task||"", startDate:t.start_date||"", endDate:t.end_date||"", pic:t.pic||"", status:t.status||"", phase:t.phase||"", createdBy:t.created_by||"" });
+  });
+  (todosRes.data || []).forEach(t => {
+    const r = ensureRecord(t.project_id); if (!r) return;
+    r.todos.push({ id:t.id, task:t.task||"", pic:t.pic||"", dueDate:t.due_date||"", status:t.status||"", blocker:t.blocker||"", createdBy:t.created_by||"" });
+  });
+  (updatesRes.data || []).forEach(u => {
+    const r = ensureRecord(u.project_id); if (!r) return;
+    r.updates.push({ id:u.id, text:u.text_content||"", date:u.created_at, createdBy:u.created_by||"" });
+  });
+
+  const baselineRecords = {};
+  const ensureBaseline = pid => {
+    const key = idToKey[pid]; if (!key) return null;
+    if (!baselineRecords[key]) baselineRecords[key] = {
+      charter:{}, readiness:{}, documentRows:[], changeRequestRows:[], stakeholderRows:[],
+      benefitRows:[], dependencyRows:[], riskLogRows:[], lessonsLearnedRows:[], ...idToAppProject[pid]
+    };
+    return baselineRecords[key];
+  };
+  (charterRes.data || []).forEach(c => {
+    const b = ensureBaseline(c.project_id); if (!b) return;
+    const charter = {};
+    Object.entries(CHARTER_COL_MAP).forEach(([jsKey, col]) => { charter[jsKey] = c[col] || ""; });
+    b.charter = charter;
+  });
+  Object.entries(PMO_ROW_TABLE_MAP).forEach(([jsKey, cfg]) => {
+    const dataMap = { changeRequestRows:crRes, stakeholderRows:stakeholderRes, benefitRows:benefitRes, dependencyRows:depRes, riskLogRows:riskRes, lessonsLearnedRows:lessonsRes, documentRows:docsRes };
+    (dataMap[jsKey].data || []).forEach(row => {
+      const b = ensureBaseline(row.project_id); if (!b) return;
+      const obj = { id: row.id, createdBy: row.created_by || "" };
+      Object.entries(cfg.cols).forEach(([jk, col]) => { obj[jk] = row[col] || ""; });
+      b[jsKey].push(obj);
+    });
+  });
+
+  const changeManagementRecords = {};
+  (cmNotesRes.data || []).forEach(c => {
+    const key = idToKey[c.project_id]; if (!key) return;
+    changeManagementRecords[key] = { notes: c.notes || "", ...idToAppProject[c.project_id] };
+  });
+
+  const masterData = { phase:[], mountain:[], stream:[], subStream:[], applications:[], deliveryModel:[] };
+  (masterRes.data || []).sort((a,b) => a.sort_order - b.sort_order).forEach(m => {
+    const jsKey = MASTER_DATA_CATEGORY_MAP_REV[m.category];
+    if (jsKey) masterData[jsKey].push(m.value);
+  });
+
+  const userManagement = { superAdmin:[], tpo:[], pmo:[], bpo:[], viewOnly:[] };
+  (rolesRes.data || []).forEach(r => { if (userManagement[r.role]) userManagement[r.role].push(r.email); });
+
+  const weeklyReports = (weeklyRes.data || []).map(r => ({
+    id:r.id, generatedDate:r.generated_date, stream:r.stream, generatedBy:r.generated_by || "",
+    diffSummary:r.diff_summary || {}, priorityRiskProjects:r.priority_risk_projects || [], aiAnalysis:r.ai_analysis || {},
+    snapshots:r.snapshots || []
+  }));
+
+  return { projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports };
 }
 
-async function pushRemoteState(partial) {
-  if (!supabaseClient) return { ok:false, updatedAt:null };
-  // updated_at is NOT set here — a database trigger stamps it with the
-  // server's clock, so ordering between competing writes (from different
-  // tabs/users, possibly out of order over the network) is decided by the
-  // database, not by comparing client clocks that can be skewed or racy.
-  const row = { id: SUPABASE_ROW_ID };
-  Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (partial[stateKey] !== undefined) row[col] = partial[stateKey]; });
-  const { data, error } = await supabaseClient.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" }).select("updated_at").maybeSingle();
-  if (error) console.error("Supabase save failed:", error.message || error);
-  return { ok: !error, updatedAt: (data && data.updated_at) || null };
-}
-
-/* Real-time events can arrive out of order (reconnect backlogs, network
-   lag) — a stale event delivered late must never overwrite something
-   newer we already have. Every event carries its row's updated_at, and
-   the caller only applies it if that's newer than the last one applied. */
-function subscribeRemoteState(onChange) {
+/* Any change to any of the 16 tables just triggers a full refetch+rebuild
+   (debounced) rather than trying to patch 16 tables' worth of realtime
+   payloads individually — simpler and still correct for this app's scale. */
+function subscribeSupabaseChanges(onChange) {
   if (!supabaseClient) return () => {};
-  const channel = supabaseClient
-    .channel("app_state_changes")
-    .on("postgres_changes", { event: "*", schema: "public", table: SUPABASE_TABLE, filter: `id=eq.${SUPABASE_ROW_ID}` }, payload => {
-      if (!payload.new) return;
-      const out = { updatedAt: payload.new.updated_at || null };
-      Object.entries(SUPABASE_COLUMN_MAP).forEach(([stateKey, col]) => { if (payload.new[col] !== undefined) out[stateKey] = payload.new[col]; });
-      onChange(out);
-    })
-    .subscribe();
-  return () => supabaseClient.removeChannel(channel);
+  const tables = ["projects","tasks","todos","project_updates","project_charter","change_management_notes",
+    "change_request_log","stakeholder_register","benefit_register","dependency_log","risk_log","lessons_learned",
+    "pmo_documents","master_data_items","user_roles","weekly_reports"];
+  let timer = null;
+  const trigger = () => { clearTimeout(timer); timer = setTimeout(onChange, 300); };
+  const channel = supabaseClient.channel("normalized_changes");
+  tables.forEach(t => { channel.on("postgres_changes", { event:"*", schema:"public", table:t }, trigger); });
+  channel.subscribe();
+  return () => { clearTimeout(timer); supabaseClient.removeChannel(channel); };
+}
+
+/* ---- Scoped write helpers — each touches only the rows it owns ---- */
+async function sbUpsertProject(row) {
+  const { error } = await supabaseClient.from("projects").upsert({
+    id: row.id, mountain: row.mountain || null, stream: row.stream || null, sub_stream: row.subStream || null,
+    application: row.application || null, delivery_model: row.deliveryModel || null, project: row.project,
+    resource: row.resource || null, start_date: row.startDate || null, end_date: row.endDate || null,
+    tpo: row.tpo || null, delivery_lead: row.deliveryLead || null, priority: row.priority || null,
+    phase: row.phase || null, created_by: row.createdBy || null
+  }, { onConflict:"id" });
+  return sqError("upsert project", error);
+}
+async function sbDeleteProject(id) {
+  const { error } = await supabaseClient.from("projects").delete().eq("id", id);
+  return sqError("delete project", error);
+}
+async function sbFindProjectId(application, project) {
+  const { data, error } = await supabaseClient.from("projects").select("id")
+    .ilike("application", application || "").ilike("project", project || "").maybeSingle();
+  if (error) { sqError("find project", error); return null; }
+  return data ? data.id : null;
+}
+async function sbReplaceTasksTodos(projectId, tasks, todos) {
+  await supabaseClient.from("tasks").delete().eq("project_id", projectId);
+  await supabaseClient.from("todos").delete().eq("project_id", projectId);
+  if (tasks.length) {
+    const { error } = await supabaseClient.from("tasks").insert(tasks.map(t => ({
+      id:t.id, project_id:projectId, no:t.no||null, task:t.task||null, start_date:t.startDate||null,
+      end_date:t.endDate||null, pic:t.pic||null, status:t.status||null, phase:t.phase||null, created_by:t.createdBy||null
+    })));
+    sqError("save tasks", error);
+  }
+  if (todos.length) {
+    const { error } = await supabaseClient.from("todos").insert(todos.map(t => ({
+      id:t.id, project_id:projectId, task:t.task||null, pic:t.pic||null, due_date:t.dueDate||null,
+      status:t.status||null, blocker:t.blocker||null, created_by:t.createdBy||null
+    })));
+    sqError("save todos", error);
+  }
+  return true;
+}
+async function sbInsertUpdate(projectId, entry) {
+  const { error } = await supabaseClient.from("project_updates").insert({
+    id: entry.id, project_id: projectId, text_content: entry.text, created_by: entry.createdBy || null, created_at: entry.date
+  });
+  return sqError("insert note", error);
+}
+async function sbDeleteUpdate(id) {
+  const { error } = await supabaseClient.from("project_updates").delete().eq("id", id);
+  return sqError("delete note", error);
+}
+async function sbCommitBaseline(projectId, fields) {
+  if (fields.charter !== undefined) {
+    const row = { project_id: projectId };
+    Object.entries(CHARTER_COL_MAP).forEach(([jsKey, col]) => { row[col] = fields.charter[jsKey] || null; });
+    const { error } = await supabaseClient.from("project_charter").upsert(row, { onConflict:"project_id" });
+    sqError("save charter", error);
+  }
+  for (const [jsKey, cfg] of Object.entries(PMO_ROW_TABLE_MAP)) {
+    if (fields[jsKey] === undefined) continue;
+    await supabaseClient.from(cfg.table).delete().eq("project_id", projectId);
+    const rows = fields[jsKey];
+    if (rows.length) {
+      const { error } = await supabaseClient.from(cfg.table).insert(rows.map(r => {
+        const out = { id:r.id, project_id:projectId, created_by:r.createdBy||null };
+        Object.entries(cfg.cols).forEach(([jk, col]) => { out[col] = r[jk] || null; });
+        return out;
+      }));
+      sqError(`save ${cfg.table}`, error);
+    }
+  }
+  return true;
+}
+async function sbCommitCmNotes(projectId, notes) {
+  const { error } = await supabaseClient.from("change_management_notes").upsert(
+    { project_id: projectId, notes: notes || null }, { onConflict:"project_id" }
+  );
+  return sqError("save CM notes", error);
+}
+async function sbSaveMasterData(masterData) {
+  const { error: delErr } = await supabaseClient.from("master_data_items").delete().neq("id", -1);
+  if (sqError("clear master data", delErr) === false) return false;
+  const rows = [];
+  Object.entries(MASTER_DATA_CATEGORY_MAP).forEach(([jsKey, category]) => {
+    (masterData[jsKey] || []).forEach((value, i) => { if (norm(value)) rows.push({ category, value, sort_order:i }); });
+  });
+  if (!rows.length) return true;
+  const { error } = await supabaseClient.from("master_data_items").insert(rows);
+  return sqError("save master data", error);
+}
+async function sbSaveUserManagement(userManagement) {
+  const { error: delErr } = await supabaseClient.from("user_roles").delete().neq("email", "");
+  if (sqError("clear user roles", delErr) === false) return false;
+  const rows = [];
+  Object.keys(userManagement).forEach(role => {
+    (userManagement[role] || []).forEach(email => { if (norm(email)) rows.push({ email: norm(email).toLowerCase(), role }); });
+  });
+  if (!rows.length) return true;
+  const { error } = await supabaseClient.from("user_roles").insert(rows);
+  return sqError("save user roles", error);
+}
+async function sbInsertUserRole(email, role) {
+  const { error } = await supabaseClient.from("user_roles").upsert({ email: norm(email).toLowerCase(), role }, { onConflict:"email" });
+  return sqError("insert user role", error);
+}
+async function sbInsertWeeklyReports(reports) {
+  const { error } = await supabaseClient.from("weekly_reports").insert(reports.map(r => ({
+    id:r.id, generated_date:r.generatedDate, stream:r.stream, generated_by:r.generatedBy||null,
+    diff_summary:r.diffSummary||{}, priority_risk_projects:r.priorityRiskProjects||[], ai_analysis:r.aiAnalysis||{}, snapshots:r.snapshots||[]
+  })));
+  return sqError("save weekly reports", error);
+}
+async function sbDeleteWeeklyReport(id) {
+  const { error } = await supabaseClient.from("weekly_reports").delete().eq("id", id);
+  return sqError("delete weekly report", error);
 }
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -3093,7 +3310,6 @@ function AppRoot() {
   const [weeklyReports, setWeeklyReports] = useState(stored.weeklyReports || []);
   const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient);
   const remoteHydrated = useRef(false);
-  const lastAppliedUpdatedAt = useRef(null);
   const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
   const [cmApplicationText, setCmApplicationText] = useState(stored.lastCmApplication || "");
   const [cmProjectText, setCmProjectText] = useState(stored.lastCmProject || "");
@@ -3117,6 +3333,7 @@ function AppRoot() {
   const [remoteSaveFailed, setRemoteSaveFailed] = useState(false);
   const [saveErrorDismissed, setSaveErrorDismissed] = useState(false);
   useEffect(() => { if (remoteSaveFailed) setSaveErrorDismissed(false); }, [remoteSaveFailed]);
+  useEffect(() => { notifySupabaseResult = ok => setRemoteSaveFailed(!ok); return () => { notifySupabaseResult = null; }; }, []);
   const mounted = useRef(false);
   const picListId = "pic-suggest";
 
@@ -3126,40 +3343,37 @@ function AppRoot() {
   useEffect(() => {
     if (!supabaseClient) return;
     let cancelled = false;
-    fetchRemoteState().then(remote => {
+    const applyRemote = remote => {
+      if (!remote || cancelled) return;
+      setProjectList(remote.projectList);
+      setRecords(remote.records);
+      setBaselineRecords(remote.baselineRecords);
+      setChangeManagementRecords(remote.changeManagementRecords);
+      setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
+      setUserManagement(remote.userManagement);
+      setWeeklyReports(remote.weeklyReports);
+    };
+    fetchAllFromSupabase().then(remote => {
       if (cancelled) return;
-      if (remote) {
-        if (remote.projectList !== undefined) setProjectList(remote.projectList);
-        if (remote.records !== undefined) setRecords(remote.records);
-        if (remote.baselineRecords !== undefined) setBaselineRecords(remote.baselineRecords);
-        if (remote.changeManagementRecords !== undefined) setChangeManagementRecords(remote.changeManagementRecords);
-        if (remote.masterData !== undefined) setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
-        if (remote.userManagement !== undefined) setUserManagement(remote.userManagement);
-        if (remote.weeklyReports !== undefined) setWeeklyReports(remote.weeklyReports);
-        lastAppliedUpdatedAt.current = remote.updatedAt || null;
-      }
+      applyRemote(remote);
       remoteHydrated.current = true;
       setRemoteLoading(false);
     });
-    const unsubscribe = subscribeRemoteState(remote => {
-      // Ignore anything not newer than what we already have — this is what
-      // stops a late/out-of-order event (reconnect backlog, network lag)
-      // from reverting data we (or someone else) already moved past.
-      if (remote.updatedAt && lastAppliedUpdatedAt.current && remote.updatedAt <= lastAppliedUpdatedAt.current) return;
-      if (remote.projectList !== undefined) setProjectList(remote.projectList);
-      if (remote.records !== undefined) setRecords(remote.records);
-      if (remote.baselineRecords !== undefined) setBaselineRecords(remote.baselineRecords);
-      if (remote.changeManagementRecords !== undefined) setChangeManagementRecords(remote.changeManagementRecords);
-      if (remote.masterData !== undefined) setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
-      if (remote.userManagement !== undefined) setUserManagement(remote.userManagement);
-      if (remote.weeklyReports !== undefined) setWeeklyReports(remote.weeklyReports);
-      if (remote.updatedAt) lastAppliedUpdatedAt.current = remote.updatedAt;
+    const unsubscribe = subscribeSupabaseChanges(() => {
+      fetchAllFromSupabase().then(applyRemote);
     });
     return () => { cancelled = true; unsubscribe(); };
   }, []);
 
   const key = useMemo(() => makeKey(applicationText, projectText), [applicationText, projectText]);
   const record = records[key] || { tasks:[], todos:[], updates:[] };
+  const currentProjectId = useMemo(() => {
+    const row = (projectList || []).find(r =>
+      norm(r.application).toLowerCase() === norm(applicationText).toLowerCase() &&
+      norm(r.project).toLowerCase() === norm(projectText).toLowerCase()
+    );
+    return row ? row.id : null;
+  }, [projectList, applicationText, projectText]);
 
   const updateRecord = updater => {
     setRecords(prev => {
@@ -3175,6 +3389,13 @@ function AppRoot() {
     benefitRows:[], dependencyRows:[], riskLogRows:[], lessonsLearnedRows:[]
   };
   const baselineRecord = baselineRecords[baselineKey] || DEFAULT_BASELINE_RECORD;
+  const baselineProjectId = useMemo(() => {
+    const row = (projectList || []).find(r =>
+      norm(r.application).toLowerCase() === norm(baselineApplicationText).toLowerCase() &&
+      norm(r.project).toLowerCase() === norm(baselineProjectText).toLowerCase()
+    );
+    return row ? row.id : null;
+  }, [projectList, baselineApplicationText, baselineProjectText]);
   const updateBaselineRecord = updater => {
     setBaselineRecords(prev => {
       const cur = prev[baselineKey] || DEFAULT_BASELINE_RECORD;
@@ -3182,13 +3403,26 @@ function AppRoot() {
       return { ...prev, [baselineKey]: { ...next, application: baselineApplicationText, project: baselineProjectText } };
     });
   };
-  const onCommitBaseline = fields => updateBaselineRecord(cur => ({ ...cur, ...fields }));
+  const onCommitBaseline = fields => {
+    updateBaselineRecord(cur => ({ ...cur, ...fields }));
+    if (supabaseClient && baselineProjectId) sbCommitBaseline(baselineProjectId, fields);
+  };
 
   const cmKey = useMemo(() => makeKey(cmApplicationText, cmProjectText), [cmApplicationText, cmProjectText]);
   const changeManagementRecord = changeManagementRecords[cmKey] || { notes:"" };
-  const onCommitNotes = value => setChangeManagementRecords(prev => ({
-    ...prev, [cmKey]: { ...(prev[cmKey] || {}), notes: value, application: cmApplicationText, project: cmProjectText }
-  }));
+  const cmProjectId = useMemo(() => {
+    const row = (projectList || []).find(r =>
+      norm(r.application).toLowerCase() === norm(cmApplicationText).toLowerCase() &&
+      norm(r.project).toLowerCase() === norm(cmProjectText).toLowerCase()
+    );
+    return row ? row.id : null;
+  }, [projectList, cmApplicationText, cmProjectText]);
+  const onCommitNotes = value => {
+    setChangeManagementRecords(prev => ({
+      ...prev, [cmKey]: { ...(prev[cmKey] || {}), notes: value, application: cmApplicationText, project: cmProjectText }
+    }));
+    if (supabaseClient && cmProjectId) sbCommitCmNotes(cmProjectId, value);
+  };
 
   const onOpenProjectWizard = (application, project) => {
     setApplicationText(application);
@@ -3236,8 +3470,16 @@ function AppRoot() {
   };
   const onCancelNavigation = () => setPendingNavigation(null);
 
-  const onSaveMasterData = draft => setMasterData({ ...DEFAULT_MASTER_DATA, ...draft });
-  const onSaveUserManagement = draft => setUserManagement({ ...DEFAULT_USER_MANAGEMENT, ...draft });
+  const onSaveMasterData = draft => {
+    const merged = { ...DEFAULT_MASTER_DATA, ...draft };
+    setMasterData(merged);
+    if (supabaseClient) sbSaveMasterData(merged);
+  };
+  const onSaveUserManagement = draft => {
+    const merged = { ...DEFAULT_USER_MANAGEMENT, ...draft };
+    setUserManagement(merged);
+    if (supabaseClient) sbSaveUserManagement(merged);
+  };
 
   const onLogin = rawEmail => {
     const email = norm(rawEmail).toLowerCase();
@@ -3255,6 +3497,7 @@ function AppRoot() {
       // Bootstrap: no one is registered yet, so the first person to log in becomes Super Admin.
       matchedRole = "superAdmin";
       setUserManagement(prev => ({ ...prev, superAdmin: [...(prev.superAdmin || []), norm(rawEmail)] }));
+      if (supabaseClient) sbInsertUserRole(rawEmail, "superAdmin");
     }
 
     if (!matchedRole) {
@@ -3265,13 +3508,23 @@ function AppRoot() {
     return { ok:true };
   };
   const onLogout = () => setCurrentUser(null);
-  const onSaveWeeklyReports = newReports => setWeeklyReports(list => [...list, ...newReports]);
-  const onDeleteWeeklyReport = id => setWeeklyReports(list => list.filter(r => r.id !== id));
+  const onSaveWeeklyReports = newReports => {
+    setWeeklyReports(list => [...list, ...newReports]);
+    if (supabaseClient) sbInsertWeeklyReports(newReports);
+  };
+  const onDeleteWeeklyReport = id => {
+    setWeeklyReports(list => list.filter(r => r.id !== id));
+    if (supabaseClient) sbDeleteWeeklyReport(id);
+  };
 
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; return; }
     setSaveStatus("saving");
     const t = setTimeout(() => {
+      // localStorage still holds a full snapshot too (offline cache / instant
+      // reload), but it's no longer what drives cross-user sync — each
+      // mutation handler below pushes its own scoped change to Supabase the
+      // moment it happens, instead of one giant "save everything" blob push.
       const ok = saveState({
         currentUser,
         activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, sidebarCollapsed,
@@ -3282,40 +3535,40 @@ function AppRoot() {
         taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden, plFiltersByUser
       });
       setSaveStatus(ok ? "saved" : "error");
-      if (supabaseClient && remoteHydrated.current) {
-        pushRemoteState({ projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports })
-          .then(result => {
-            setRemoteSaveFailed(!result.ok);
-            // Mark our own write as the latest known state so a late echo
-            // of it (or anything older, like a stale reconnect backlog
-            // event) can never be applied on top of it afterwards. Guard
-            // against regressing if an older push's response resolves
-            // after a newer one (out-of-order network completion).
-            if (result.ok && result.updatedAt) {
-              if (!lastAppliedUpdatedAt.current || result.updatedAt > lastAppliedUpdatedAt.current) {
-                lastAppliedUpdatedAt.current = result.updatedAt;
-              }
-            }
-          });
-      }
     }, 400);
     return () => clearTimeout(t);
   }, [currentUser, activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, weeklyReports, sidebarCollapsed, applicationText, projectText, baselineApplicationText, baselineProjectText, cmApplicationText, cmProjectText, taskColumnOrder, taskHiddenColumns, todoHiddenColumns, plColumnOrder, plHiddenColumns, taskGanttHidden, plGanttHidden, plFiltersByUser]);
 
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
-  const onRemoveProjectRow = id => setProjectList(list => list.filter(r => r.id !== id));
-  const onUpdateProjectRow = (id, field, value) => setProjectList(list => list.map(r => r.id === id ? { ...r, [field]: value } : r));
-  const onReplaceProjectList = newList => setProjectList(newList);
-  const onImportProjectRows = rows => setProjectList(list => [
-    ...list, ...rows.map(r => ({ ...r, createdBy: currentUser ? currentUser.email : "" }))
-  ]);
+  const onRemoveProjectRow = id => {
+    setProjectList(list => list.filter(r => r.id !== id));
+    if (supabaseClient) sbDeleteProject(id);
+  };
+  const onUpdateProjectRow = (id, field, value) => {
+    setProjectList(list => {
+      const next = list.map(r => r.id === id ? { ...r, [field]: value } : r);
+      if (supabaseClient) { const row = next.find(r => r.id === id); if (row) sbUpsertProject(row); }
+      return next;
+    });
+  };
+  const onReplaceProjectList = newList => {
+    setProjectList(newList);
+    if (supabaseClient) newList.forEach(row => sbUpsertProject(row));
+  };
+  const onImportProjectRows = rows => {
+    const stamped = rows.map(r => ({ ...r, createdBy: currentUser ? currentUser.email : "" }));
+    setProjectList(list => [...list, ...stamped]);
+    if (supabaseClient) stamped.forEach(row => sbUpsertProject(row));
+  };
   const onCreateProjectFieldChange = (field, value) => setCreateProjectForm(f => ({ ...f, [field]: value }));
   const onSubmitCreateProject = () => {
     if (!norm(createProjectForm.application) || !norm(createProjectForm.project)) {
       alert("Application and Project are required.");
       return;
     }
-    setProjectList(list => [...list, { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "" }]);
+    const row = { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "" };
+    setProjectList(list => [...list, row]);
+    if (supabaseClient) sbUpsertProject(row);
     setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
     setActiveView("list");
   };
@@ -3325,7 +3578,11 @@ function AppRoot() {
       alert("Application and Project are required.");
       return;
     }
-    setProjectList(list => list.map(r => r.id === projectId ? { ...r, ...fields } : r));
+    setProjectList(list => {
+      const next = list.map(r => r.id === projectId ? { ...r, ...fields } : r);
+      if (supabaseClient) { const row = next.find(r => r.id === projectId); if (row) sbUpsertProject(row); }
+      return next;
+    });
   };
 
   const onPlSort = k => setPlSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
@@ -3360,15 +3617,23 @@ function AppRoot() {
   );
   const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
 
-  const onCommitRecord = (tasks, todos) => updateRecord(cur => ({ ...cur, tasks, todos }));
+  const onCommitRecord = (tasks, todos) => {
+    updateRecord(cur => ({ ...cur, tasks, todos }));
+    if (supabaseClient && currentProjectId) sbReplaceTasksTodos(currentProjectId, tasks, todos);
+  };
   const onToggleTodoColumn = colKey => setTodoHiddenColumns(c => c.includes(colKey) ? c.filter(k => k !== colKey) : [...c, colKey]);
 
   const onSubmitUpdate = text => {
     const v = (text || "").trim();
     if (!v) return;
-    updateRecord(cur => ({ ...cur, updates: [...(cur.updates || []), { id: uid(), text: v, date: new Date().toISOString(), createdBy: currentUser ? currentUser.email : "" }] }));
+    const entry = { id: uid(), text: v, date: new Date().toISOString(), createdBy: currentUser ? currentUser.email : "" };
+    updateRecord(cur => ({ ...cur, updates: [...(cur.updates || []), entry] }));
+    if (supabaseClient && currentProjectId) sbInsertUpdate(currentProjectId, entry);
   };
-  const onDeleteUpdate = entryId => updateRecord(cur => ({ ...cur, updates: (cur.updates || []).filter(e => e.id !== entryId) }));
+  const onDeleteUpdate = entryId => {
+    updateRecord(cur => ({ ...cur, updates: (cur.updates || []).filter(e => e.id !== entryId) }));
+    if (supabaseClient) sbDeleteUpdate(entryId);
+  };
 
   const onToggleColumnVisibility = colKey => setTaskHiddenColumns(c => c.includes(colKey) ? c.filter(k => k !== colKey) : [...c, colKey]);
   const onReorderColumn = (dragKey, dropKey) => {
