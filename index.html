@@ -91,7 +91,7 @@ async function fetchAllFromSupabase() {
   const [projectsRes, tasksRes, todosRes, updatesRes, charterRes, cmNotesRes,
     crRes, stakeholderRes, benefitRes, depRes, riskRes, lessonsRes, docsRes,
     masterRes, rolesRes, weeklyRes] = await Promise.all([
-    supabaseClient.from("projects").select("*"),
+    supabaseClient.from("projects").select("*").is("deleted_at", null),
     supabaseClient.from("tasks").select("*"),
     supabaseClient.from("todos").select("*"),
     supabaseClient.from("project_updates").select("*"),
@@ -221,9 +221,31 @@ async function sbUpsertProject(row) {
   }, { onConflict:"id" });
   return sqError("upsert project", error);
 }
-async function sbDeleteProject(id) {
+async function sbDeleteProject(id, deletedBy) {
+  // Soft delete — moves the project to Trash instead of removing it (and
+  // everything cascaded to it: tasks, PMO data, etc.) permanently. Since
+  // this is an UPDATE, not a DELETE, the on-delete-cascade on child tables
+  // never fires, so all related Timeline/PMO/CM data is preserved as-is.
+  const { error } = await supabaseClient.from("projects")
+    .update({ deleted_at: new Date().toISOString(), deleted_by: deletedBy || null })
+    .eq("id", id);
+  return sqError("move project to trash", error);
+}
+async function sbFetchTrashedProjects() {
+  if (!supabaseClient) return [];
+  const { data, error } = await supabaseClient.from("projects").select("*").not("deleted_at", "is", null).order("deleted_at", { ascending:false });
+  if (error) { sqError("fetch trash", error); return []; }
+  return data || [];
+}
+async function sbRestoreProject(id) {
+  const { error } = await supabaseClient.from("projects").update({ deleted_at:null, deleted_by:null }).eq("id", id);
+  return sqError("restore project", error);
+}
+async function sbPurgeProject(id) {
+  // Permanent — this one genuinely deletes the row (and cascades to every
+  // related table), no way back. Only reachable from the Trash page.
   const { error } = await supabaseClient.from("projects").delete().eq("id", id);
-  return sqError("delete project", error);
+  return sqError("permanently delete project", error);
 }
 async function sbFindProjectId(application, project) {
   const { data, error } = await supabaseClient.from("projects").select("id")
@@ -1629,6 +1651,7 @@ const NAV_ITEMS = [
   ] },
   { key:"master-data", label:"Master Data Management", icon:Icon.database },
   { key:"user-management", label:"User Management", icon:Icon.users },
+  { key:"trash", label:"Trash", icon:Icon.trash },
 ];
 const DOC_TITLES = Object.fromEntries(
   NAV_ITEMS.find(i => i.key === "document").children.map(c => [c.key, c.label])
@@ -3160,6 +3183,69 @@ function WeeklyReportDetailModal({ report, onClose }) {
   );
 }
 
+function TrashView({ currentUser, onRestored }) {
+  const [items, setItems] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const canManage = !!(currentUser && currentUser.role === "superAdmin");
+
+  const load = () => { setItems(null); sbFetchTrashedProjects().then(setItems); };
+  useEffect(() => { if (canManage) load(); else setItems([]); }, [canManage]);
+
+  const handleRestore = async row => {
+    setBusyId(row.id);
+    const ok = await sbRestoreProject(row.id);
+    setBusyId(null);
+    if (ok) { load(); if (onRestored) onRestored(); }
+  };
+  const handlePurge = async row => {
+    if (!window.confirm(`Permanently delete "${row.project}"? This also deletes all of its Timeline and PMO data, and cannot be undone.`)) return;
+    setBusyId(row.id);
+    const ok = await sbPurgeProject(row.id);
+    setBusyId(null);
+    if (ok) load();
+  };
+
+  return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
+    h("div", { style:{ marginBottom:20 } },
+      h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Trash"),
+      h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Deleted projects land here first. Restore them, or delete permanently (which also removes their Timeline and PMO data for good).")
+    ),
+    !canManage
+      ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "Only Super Admin can view Trash.")
+      : h("div", { className:"card", style:{ padding:16 } },
+          items === null
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "Loading\u2026")
+            : items.length === 0
+            ? h("div", { style:{ padding:"40px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "Trash is empty.")
+            : h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
+                h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+                  h("thead", null, h("tr", { style:{ background:"#152238" } },
+                    h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Project"),
+                    h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Application"),
+                    h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Deleted At"),
+                    h("th", { style:{ padding:"10px 12px", textAlign:"left", color:"#fff", fontSize:12, fontWeight:600 } }, "Deleted By"),
+                    h("th", { style:{ width:170, background:"#152238" } })
+                  )),
+                  h("tbody", null,
+                    items.map((row, i) => h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
+                      h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#334155", fontWeight:600 } }, row.project || "\u2014"),
+                      h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, row.application || "\u2014"),
+                      h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, row.deleted_at ? new Date(row.deleted_at).toLocaleString("en-US") : "\u2014"),
+                      h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, row.deleted_by || "\u2014"),
+                      h("td", { style:{ padding:"9px 12px", borderBottom:"1px solid #F1F5F9", textAlign:"right" } },
+                        h("div", { style:{ display:"flex", gap:8, justifyContent:"flex-end" } },
+                          h("button", { className:"btn", disabled:busyId===row.id, onClick:()=>handleRestore(row) }, "Restore"),
+                          h("button", { onClick:()=>handlePurge(row), disabled:busyId===row.id, style:{ color:"#DC2626", background:"none", border:"1px solid #FCA5A5", borderRadius:8, padding:"7px 12px", cursor:"pointer", fontSize:12, fontWeight:600 } }, "Delete Permanently")
+                        )
+                      )
+                    ))
+                  )
+                )
+              )
+        )
+  );
+}
+
 function WeeklyReportView({ weeklyReports, currentUser, onDeleteWeeklyReport, projectList, records, onSaveWeeklyReports, streamMasterOptions }) {
   const [selected, setSelected] = useState(null);
   const sorted = useMemo(() => [...(weeklyReports || [])].sort((a, b) => b.generatedDate.localeCompare(a.generatedDate)), [weeklyReports]);
@@ -3542,7 +3628,7 @@ function AppRoot() {
   /* ---- Project List CRUD (read-only; creation happens via the Create Project menu) ---- */
   const onRemoveProjectRow = id => {
     setProjectList(list => list.filter(r => r.id !== id));
-    if (supabaseClient) sbDeleteProject(id);
+    if (supabaseClient) sbDeleteProject(id, currentUser ? currentUser.email : null);
   };
   const onUpdateProjectRow = (id, field, value) => {
     setProjectList(list => {
@@ -3774,6 +3860,8 @@ function AppRoot() {
             userManagement, onSaveAll: onSaveUserManagement,
             readOnly: !currentUser || currentUser.role !== "superAdmin"
           })
+        : activeView === "trash"
+        ? h(TrashView, { currentUser })
         : PLACEHOLDER_TITLES[activeView]
         ? (activeView === "doc-baseline"
             ? h(ProjectBaselineView, { ...projectBaselineViewProps, readOnly: true })
