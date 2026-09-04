@@ -2014,21 +2014,18 @@ const ROLE_LABELS = Object.fromEntries(USER_ROLES.map(r => [r.key, r.label]));
 /* =========================================================================
    LOGIN
    ========================================================================= */
-function LoginView({ onLogin, onSignUp }) {
-  const [mode, setMode] = useState("signin"); // "signin" | "signup"
+function LoginView({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
     setSubmitting(true);
-    setError(""); setInfo("");
-    const result = mode === "signin" ? await onLogin(email, password) : await onSignUp(email, password);
+    setError("");
+    const result = await onLogin(email, password);
     setSubmitting(false);
     if (!result.ok) setError(result.message);
-    else if (result.info) setInfo(result.info);
   };
 
   return h("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#F3F5F8", padding:20 } },
@@ -2038,21 +2035,8 @@ function LoginView({ onLogin, onSignUp }) {
         h("div", { style:{ fontSize:13, color:"#64748B", marginTop:4 } }, "Delivery Management")
       ),
       h("div", { className:"card", style:{ padding:28 } },
-        h("div", { style:{ display:"flex", borderBottom:"1px solid #E2E8F0", marginBottom:20 } },
-          h("button", {
-            onClick: () => { setMode("signin"); setError(""); setInfo(""); },
-            style:{ flex:1, padding:"9px 0", background:"none", border:"none", borderBottom: mode==="signin" ? "2px solid #1E3A5F" : "2px solid transparent", color: mode==="signin" ? "#152238" : "#94A3B8", fontWeight:600, fontSize:13, cursor:"pointer" }
-          }, "Log In"),
-          h("button", {
-            onClick: () => { setMode("signup"); setError(""); setInfo(""); },
-            style:{ flex:1, padding:"9px 0", background:"none", border:"none", borderBottom: mode==="signup" ? "2px solid #1E3A5F" : "2px solid transparent", color: mode==="signup" ? "#152238" : "#94A3B8", fontWeight:600, fontSize:13, cursor:"pointer" }
-          }, "First Time? Set Password")
-        ),
-        h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } },
-          mode === "signin"
-            ? "Use the email and password you set up."
-            : "Your email must already be registered in User Management. Choose a password to finish setting up your account."
-        ),
+        h("div", { style:{ fontSize:16, fontWeight:700, color:"#1E293B", marginBottom:4 } }, "Log In"),
+        h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } }, "Use the email and password your Super Admin registered for you."),
         h("label", { style:{ fontSize:12, color:"#64748B", fontWeight:600, display:"block", marginBottom:6 } }, "Email"),
         h("input", {
           type:"email", value:email, autoFocus:true,
@@ -2065,13 +2049,12 @@ function LoginView({ onLogin, onSignUp }) {
           type:"password", value:password,
           onChange: e => { setPassword(e.target.value); if (error) setError(""); },
           onKeyDown: e => { if (e.key === "Enter") handleSubmit(); },
-          placeholder: mode === "signup" ? "At least 6 characters" : "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022",
-          style:{ width:"100%", fontSize:14, border: error ? "1px solid #FCA5A5" : "1px solid #E2E8F0", borderRadius:8, padding:"10px 12px", outline:"none", marginBottom: error||info ? 8 : 16 }
+          placeholder:"\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022",
+          style:{ width:"100%", fontSize:14, border: error ? "1px solid #FCA5A5" : "1px solid #E2E8F0", borderRadius:8, padding:"10px 12px", outline:"none", marginBottom: error ? 8 : 16 }
         }),
         error && h("div", { style:{ fontSize:12, color:"#DC2626", marginBottom:16 } }, error),
-        info && h("div", { style:{ fontSize:12, color:"#166534", marginBottom:16 } }, info),
         h("button", { className:"btn btn-primary", onClick:handleSubmit, disabled:submitting, style:{ width:"100%", justifyContent:"center" } },
-          submitting ? "Please wait\u2026" : mode === "signin" ? "Log In" : "Create Password"
+          submitting ? "Please wait\u2026" : "Log In"
         )
       )
     )
@@ -3630,35 +3613,6 @@ function AppRoot() {
     if (supabaseClient) sbSaveUserManagement(merged);
   };
 
-  const onSignUp = async (rawEmail, password) => {
-    const email = norm(rawEmail).toLowerCase();
-    if (!email) return { ok:false, message:"Email is required." };
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok:false, message:"Invalid email format." };
-    if (!password || password.length < 6) return { ok:false, message:"Password must be at least 6 characters." };
-    if (!supabaseClient) return { ok:false, message:"Not connected to the server." };
-
-    const role = await lookupRoleForEmail(email);
-    const { count } = await supabaseClient.from("user_roles").select("*", { count:"exact", head:true });
-    const totalRegistered = count || 0;
-    if (!role && totalRegistered > 0) {
-      return { ok:false, message:"This email isn't registered in User Management yet. Ask your Super Admin to add it first." };
-    }
-
-    const { data, error } = await supabaseClient.auth.signUp({ email, password });
-    if (error) return { ok:false, message: error.message || "Could not create your account." };
-
-    if (data.session) {
-      // Authenticated immediately (project's email confirmation is off) —
-      // safe to write the bootstrap role row now, since RLS requires an
-      // authenticated session for that write and we have one.
-      const finalRole = role || "superAdmin";
-      if (!role) await sbInsertUserRole(email, "superAdmin");
-      setCurrentUser({ email, role: finalRole });
-      return { ok:true };
-    }
-    return { ok:true, info:"Account created. Check your email to confirm it, then log in." };
-  };
-
   const onLogin = async (rawEmail, password) => {
     const email = norm(rawEmail).toLowerCase();
     if (!email) return { ok:false, message:"Email is required." };
@@ -3890,7 +3844,7 @@ function AppRoot() {
   }
 
   if (!currentUser) {
-    return h(LoginView, { onLogin, onSignUp });
+    return h(LoginView, { onLogin });
   }
 
   if (dataLoading) {
