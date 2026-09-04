@@ -2014,16 +2014,21 @@ const ROLE_LABELS = Object.fromEntries(USER_ROLES.map(r => [r.key, r.label]));
 /* =========================================================================
    LOGIN
    ========================================================================= */
-function LoginView({ onLogin }) {
+function LoginView({ onLogin, onSignUp }) {
+  const [mode, setMode] = useState("signin"); // "signin" | "signup"
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setSubmitting(true);
-    const result = onLogin(email);
+    setError(""); setInfo("");
+    const result = mode === "signin" ? await onLogin(email, password) : await onSignUp(email, password);
     setSubmitting(false);
     if (!result.ok) setError(result.message);
+    else if (result.info) setInfo(result.info);
   };
 
   return h("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#F3F5F8", padding:20 } },
@@ -2033,18 +2038,41 @@ function LoginView({ onLogin }) {
         h("div", { style:{ fontSize:13, color:"#64748B", marginTop:4 } }, "Delivery Management")
       ),
       h("div", { className:"card", style:{ padding:28 } },
-        h("div", { style:{ fontSize:16, fontWeight:700, color:"#1E293B", marginBottom:4 } }, "Log In"),
-        h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } }, "Use an email already registered in User Management."),
+        h("div", { style:{ display:"flex", borderBottom:"1px solid #E2E8F0", marginBottom:20 } },
+          h("button", {
+            onClick: () => { setMode("signin"); setError(""); setInfo(""); },
+            style:{ flex:1, padding:"9px 0", background:"none", border:"none", borderBottom: mode==="signin" ? "2px solid #1E3A5F" : "2px solid transparent", color: mode==="signin" ? "#152238" : "#94A3B8", fontWeight:600, fontSize:13, cursor:"pointer" }
+          }, "Log In"),
+          h("button", {
+            onClick: () => { setMode("signup"); setError(""); setInfo(""); },
+            style:{ flex:1, padding:"9px 0", background:"none", border:"none", borderBottom: mode==="signup" ? "2px solid #1E3A5F" : "2px solid transparent", color: mode==="signup" ? "#152238" : "#94A3B8", fontWeight:600, fontSize:13, cursor:"pointer" }
+          }, "First Time? Set Password")
+        ),
+        h("div", { style:{ fontSize:13, color:"#64748B", marginBottom:20 } },
+          mode === "signin"
+            ? "Use the email and password you set up."
+            : "Your email must already be registered in User Management. Choose a password to finish setting up your account."
+        ),
         h("label", { style:{ fontSize:12, color:"#64748B", fontWeight:600, display:"block", marginBottom:6 } }, "Email"),
         h("input", {
           type:"email", value:email, autoFocus:true,
           onChange: e => { setEmail(e.target.value); if (error) setError(""); },
-          onKeyDown: e => { if (e.key === "Enter") handleSubmit(); },
           placeholder:"name@company.com",
-          style:{ width:"100%", fontSize:14, border: error ? "1px solid #FCA5A5" : "1px solid #E2E8F0", borderRadius:8, padding:"10px 12px", outline:"none", marginBottom: error ? 8 : 16 }
+          style:{ width:"100%", fontSize:14, border:"1px solid #E2E8F0", borderRadius:8, padding:"10px 12px", outline:"none", marginBottom:14 }
+        }),
+        h("label", { style:{ fontSize:12, color:"#64748B", fontWeight:600, display:"block", marginBottom:6 } }, "Password"),
+        h("input", {
+          type:"password", value:password,
+          onChange: e => { setPassword(e.target.value); if (error) setError(""); },
+          onKeyDown: e => { if (e.key === "Enter") handleSubmit(); },
+          placeholder: mode === "signup" ? "At least 6 characters" : "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022",
+          style:{ width:"100%", fontSize:14, border: error ? "1px solid #FCA5A5" : "1px solid #E2E8F0", borderRadius:8, padding:"10px 12px", outline:"none", marginBottom: error||info ? 8 : 16 }
         }),
         error && h("div", { style:{ fontSize:12, color:"#DC2626", marginBottom:16 } }, error),
-        h("button", { className:"btn btn-primary", onClick:handleSubmit, disabled:submitting, style:{ width:"100%", justifyContent:"center" } }, "Login")
+        info && h("div", { style:{ fontSize:12, color:"#166534", marginBottom:16 } }, info),
+        h("button", { className:"btn btn-primary", onClick:handleSubmit, disabled:submitting, style:{ width:"100%", justifyContent:"center" } },
+          submitting ? "Please wait\u2026" : mode === "signin" ? "Log In" : "Create Password"
+        )
       )
     )
   );
@@ -3394,7 +3422,8 @@ function AppRoot() {
   const [masterData, setMasterData] = useState({ ...DEFAULT_MASTER_DATA, ...(stored.masterData || {}) });
   const [userManagement, setUserManagement] = useState(stored.userManagement || DEFAULT_USER_MANAGEMENT);
   const [weeklyReports, setWeeklyReports] = useState(stored.weeklyReports || []);
-  const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient);
+  const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient); // checking for an existing session
+  const [dataLoading, setDataLoading] = useState(false); // fetching app data, only once logged in
   const remoteHydrated = useRef(false);
   const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
   const [cmApplicationText, setCmApplicationText] = useState(stored.lastCmApplication || "");
@@ -3423,12 +3452,42 @@ function AppRoot() {
   const mounted = useRef(false);
   const picListId = "pic-suggest";
 
-  // Pull the shared/collaborative data from Supabase on load, then keep it in
-  // sync in real time as other users make changes. No-op when Supabase isn't
-  // configured (SUPABASE_URL left empty) — the app just runs local-only.
+  const lookupRoleForEmail = async email => {
+    if (!supabaseClient) return null;
+    const { data, error } = await supabaseClient.from("user_roles").select("role").ilike("email", email).maybeSingle();
+    if (error || !data) return null;
+    return data.role;
+  };
+
+  // Real auth session check — must happen BEFORE we try to load any app
+  // data, since every table now requires a logged-in session to read
+  // (Row Level Security). A restored session (returning user) logs them
+  // back in automatically without re-entering a password.
   useEffect(() => {
     if (!supabaseClient) return;
     let cancelled = false;
+    supabaseClient.auth.getSession().then(async ({ data }) => {
+      if (cancelled) return;
+      const session = data && data.session;
+      if (session && session.user && session.user.email) {
+        const role = await lookupRoleForEmail(session.user.email);
+        if (!cancelled && role) setCurrentUser({ email: session.user.email, role });
+      }
+      if (!cancelled) setRemoteLoading(false);
+    });
+    const { data: authListener } = supabaseClient.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") setCurrentUser(null);
+    });
+    return () => { cancelled = true; authListener && authListener.subscription && authListener.subscription.unsubscribe(); };
+  }, []);
+
+  // Only once a real session exists do we pull the shared/collaborative
+  // data from Supabase, then keep it in sync in real time. No-op when
+  // Supabase isn't configured — the app just runs local-only.
+  useEffect(() => {
+    if (!supabaseClient || !currentUser) return;
+    let cancelled = false;
+    setDataLoading(true);
     const applyRemote = remote => {
       if (!remote || cancelled) return;
       setProjectList(remote.projectList);
@@ -3443,13 +3502,13 @@ function AppRoot() {
       if (cancelled) return;
       applyRemote(remote);
       remoteHydrated.current = true;
-      setRemoteLoading(false);
+      setDataLoading(false);
     });
     const unsubscribe = subscribeSupabaseChanges(() => {
       fetchAllFromSupabase().then(applyRemote);
     });
     return () => { cancelled = true; unsubscribe(); };
-  }, []);
+  }, [currentUser && currentUser.email]);
 
   const key = useMemo(() => makeKey(applicationText, projectText), [applicationText, projectText]);
   const record = records[key] || { tasks:[], todos:[], updates:[] };
@@ -3567,33 +3626,63 @@ function AppRoot() {
     if (supabaseClient) sbSaveUserManagement(merged);
   };
 
-  const onLogin = rawEmail => {
+  const onSignUp = async (rawEmail, password) => {
     const email = norm(rawEmail).toLowerCase();
     if (!email) return { ok:false, message:"Email is required." };
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok:false, message:"Invalid email format." };
+    if (!password || password.length < 6) return { ok:false, message:"Password must be at least 6 characters." };
+    if (!supabaseClient) return { ok:false, message:"Not connected to the server." };
 
-    const totalRegistered = USER_ROLES.reduce((sum, r) => sum + ((userManagement[r.key] || []).length), 0);
-    let matchedRole = null;
-    for (const role of USER_ROLES) {
-      const list = userManagement[role.key] || [];
-      if (list.some(e => norm(e).toLowerCase() === email)) { matchedRole = role.key; break; }
+    const role = await lookupRoleForEmail(email);
+    const { count } = await supabaseClient.from("user_roles").select("*", { count:"exact", head:true });
+    const totalRegistered = count || 0;
+    if (!role && totalRegistered > 0) {
+      return { ok:false, message:"This email isn't registered in User Management yet. Ask your Super Admin to add it first." };
     }
 
-    if (!matchedRole && totalRegistered === 0) {
-      // Bootstrap: no one is registered yet, so the first person to log in becomes Super Admin.
-      matchedRole = "superAdmin";
-      setUserManagement(prev => ({ ...prev, superAdmin: [...(prev.superAdmin || []), norm(rawEmail)] }));
-      if (supabaseClient) sbInsertUserRole(rawEmail, "superAdmin");
-    }
+    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) return { ok:false, message: error.message || "Could not create your account." };
 
-    if (!matchedRole) {
-      return { ok:false, message:"Email not registered. Contact Super Admin to be added in User Management." };
+    if (data.session) {
+      // Authenticated immediately (project's email confirmation is off) —
+      // safe to write the bootstrap role row now, since RLS requires an
+      // authenticated session for that write and we have one.
+      const finalRole = role || "superAdmin";
+      if (!role) await sbInsertUserRole(email, "superAdmin");
+      setCurrentUser({ email, role: finalRole });
+      return { ok:true };
     }
+    return { ok:true, info:"Account created. Check your email to confirm it, then log in." };
+  };
 
-    setCurrentUser({ email: norm(rawEmail), role: matchedRole });
+  const onLogin = async (rawEmail, password) => {
+    const email = norm(rawEmail).toLowerCase();
+    if (!email) return { ok:false, message:"Email is required." };
+    if (!password) return { ok:false, message:"Password is required." };
+    if (!supabaseClient) return { ok:false, message:"Not connected to the server." };
+
+    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) return { ok:false, message:"Incorrect email or password, or the account isn't confirmed yet." };
+
+    let role = await lookupRoleForEmail(email);
+    if (!role) {
+      const { count } = await supabaseClient.from("user_roles").select("*", { count:"exact", head:true });
+      if ((count || 0) === 0) {
+        // Bootstrap: first confirmed account becomes Super Admin.
+        role = "superAdmin";
+        await sbInsertUserRole(email, "superAdmin");
+      } else {
+        await supabaseClient.auth.signOut();
+        return { ok:false, message:"Your account exists but isn't assigned a role. Contact Super Admin." };
+      }
+    }
+    setCurrentUser({ email, role });
     return { ok:true };
   };
-  const onLogout = () => setCurrentUser(null);
+  const onLogout = () => {
+    if (supabaseClient) supabaseClient.auth.signOut();
+    setCurrentUser(null);
+  };
   const onSaveWeeklyReports = newReports => {
     setWeeklyReports(list => [...list, ...newReports]);
     if (supabaseClient) sbInsertWeeklyReports(newReports);
@@ -3798,7 +3887,13 @@ function AppRoot() {
   }
 
   if (!currentUser) {
-    return h(LoginView, { onLogin });
+    return h(LoginView, { onLogin, onSignUp });
+  }
+
+  if (dataLoading) {
+    return h("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#F3F5F8" } },
+      h("div", { style:{ fontSize:13, color:"#64748B" } }, "Loading your data\u2026")
+    );
   }
 
   return h("div", null,
