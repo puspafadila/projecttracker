@@ -3412,7 +3412,11 @@ function WeeklyReportView({ weeklyReports, currentUser, onDeleteWeeklyReport, pr
 
 function AppRoot() {
   const stored = loadState() || {};
-  const [currentUser, setCurrentUser] = useState(stored.currentUser || null);
+  // Login state is NEVER restored from localStorage here — it comes only
+  // from a real Supabase Auth session (checked below), so a stale cached
+  // "logged in" flag can't fool the UI into skipping login while every
+  // table's Row Level Security still requires a genuine session to read.
+  const [currentUser, setCurrentUser] = useState(null);
   const [activeView, setActiveView] = useState(stored.activeView || "list");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(!!stored.sidebarCollapsed);
   const onToggleSidebar = () => setSidebarCollapsed(c => !c);
@@ -3701,7 +3705,6 @@ function AppRoot() {
       // mutation handler below pushes its own scoped change to Supabase the
       // moment it happens, instead of one giant "save everything" blob push.
       const ok = saveState({
-        currentUser,
         activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, sidebarCollapsed,
         weeklyReports,
         lastApplication: applicationText, lastProject: projectText,
