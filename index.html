@@ -122,7 +122,7 @@ async function fetchAllFromSupabase() {
       application: p.application || "", deliveryModel: p.delivery_model || "", project: p.project || "",
       resource: p.resource || "", startDate: p.start_date || "", endDate: p.end_date || "",
       tpo: p.tpo || "", deliveryLead: p.delivery_lead || "", priority: p.priority || "", phase: p.phase || "",
-      createdBy: p.created_by || ""
+      createdBy: p.created_by || "", projectCode: p.project_code || ""
     };
   });
 
@@ -217,7 +217,8 @@ async function sbUpsertProject(row) {
     application: row.application || null, delivery_model: row.deliveryModel || null, project: row.project,
     resource: row.resource || null, start_date: row.startDate || null, end_date: row.endDate || null,
     tpo: row.tpo || null, delivery_lead: row.deliveryLead || null, priority: row.priority || null,
-    phase: row.phase || null, created_by: row.createdBy || null
+    phase: row.phase || null, created_by: row.createdBy || null,
+    project_code: row.projectCode || null
   }, { onConflict:"id" });
   return sqError("upsert project", error);
 }
@@ -357,6 +358,23 @@ function reconcileColumnOrder(storedOrder, defaultOrder) {
   if (!storedOrder) return defaultOrder;
   const missing = defaultOrder.filter(k => !storedOrder.includes(k));
   return missing.length ? [...storedOrder, ...missing] : storedOrder;
+}
+/* Project ID format: (Stream)-(3-digit sequence)-(Year). The sequence
+   resets per Stream+Year, and is assigned once at creation time — it
+   never changes afterward, even if the project's Stream is edited later. */
+function nextProjectCode(stream, projectList) {
+  const streamPrefix = norm(stream) || "GEN";
+  const year = new Date().getFullYear();
+  const escaped = streamPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`^${escaped}-(\\d+)-${year}$`);
+  let maxSeq = 0;
+  (projectList || []).forEach(r => {
+    if (r.projectCode) {
+      const m = r.projectCode.match(regex);
+      if (m) maxSeq = Math.max(maxSeq, parseInt(m[1], 10));
+    }
+  });
+  return `${streamPrefix}-${String(maxSeq + 1).padStart(3, "0")}-${year}`;
 }
 /* Turns a spreadsheet date value into an ISO "YYYY-MM-DD" string.
    Handles real Excel date cells (already a JS Date via cellDates:true),
@@ -782,7 +800,7 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseO
   const monthTicks = useMemo(() => buildMonthTicks(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
   const timelineW = ganttRange.totalWeeks * WEEK_W;
   const todayIdx = weekIndexFor(new Date().toISOString().slice(0,10), ganttRange.epoch, ganttRange.totalWeeks);
-  const fixedW = 44 + columns.reduce((s,c)=>s+c.width,0) + 40;
+  const fixedW = 130 + columns.reduce((s,c)=>s+c.width,0) + 40;
   const colKeys = useMemo(() => columns.map(c => c.key), [columns]);
   const phaseMeta = useMemo(() => {
     const { bg, fg } = buildPhaseColorMaps(phaseOptions);
@@ -806,7 +824,7 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseO
       h("div", { style:{ minWidth: showGantt ? fixedW + timelineW : fixedW } },
         h("div", { style:{ display:"flex", position:"sticky", top:0, zIndex:6 } },
           h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:7, background:"#152238" } },
-            h("div", { style:{ width:44, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "No"),
+            h("div", { style:{ width:130, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "Project ID"),
             columns.map(c => h(PlHeaderCell, { key:c.key, col:c, sortConfig, onSort,
               filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
               onFilterChange: v => onFilterChange(c.key, v) })),
@@ -829,7 +847,7 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseO
               const canDelete = !!(currentUser && currentUser.role === "superAdmin");
               return h("div", { key:row.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
                 h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
-                  h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, i+1),
+                  h("div", { style:{ width:130, padding:"6px 8px", fontSize:12, fontFamily:"monospace", color:"#475569", display:"flex", alignItems:"center" } }, row.projectCode || "\u2014"),
                   columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px", display:"flex", alignItems:"center", minHeight:34 } },
                     plCellDisplay(c.key, row, phaseMeta, onOpenWizard)
                   )),
@@ -1007,12 +1025,19 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         const merged = projectList.map(existingRow => {
           const dup = duplicates.find(d => d.existing.id === existingRow.id);
           if (!dup) return existingRow;
-          return { ...existingRow, ...dup.imported, id: existingRow.id, createdBy: existingRow.createdBy };
+          return { ...existingRow, ...dup.imported, id: existingRow.id, createdBy: existingRow.createdBy, projectCode: existingRow.projectCode };
         });
-        const finalList = [...merged, ...freshRows];
+        let runningList = merged;
+        const freshStamped = freshRows.map(r => {
+          const projectCode = nextProjectCode(r.stream, runningList);
+          const stampedRow = { ...r, projectCode };
+          runningList = [...runningList, stampedRow];
+          return stampedRow;
+        });
+        const finalList = [...merged, ...freshStamped];
         onReplaceAll(finalList);
         setPendingImport(null);
-        alert(`Import complete \u2014 replaced ${duplicates.length} existing project(s), added ${freshRows.length} new project(s).`);
+        alert(`Import complete \u2014 replaced ${duplicates.length} existing project(s), added ${freshStamped.length} new project(s).`);
       }
     }),
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:20 } },
@@ -2518,7 +2543,9 @@ function ReadOnlyBanner() {
    ========================================================================= */
 function CreateProjectField({ label, children }) {
   return h("div", { style:{ padding:"14px 16px", display:"flex", flexDirection:"column", gap:6 } },
-    h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E293B", textDecoration:"underline", textUnderlineOffset:"2px" } }, label),
+    h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E293B", textDecoration:"underline", textUnderlineOffset:"2px" } },
+      label, h("span", { style:{ color:"#DC2626" } }, " *")
+    ),
     children
   );
 }
@@ -3864,17 +3891,31 @@ function AppRoot() {
     if (supabaseClient) newList.forEach(row => sbUpsertProject(row));
   };
   const onImportProjectRows = rows => {
-    const stamped = rows.map(r => ({ ...r, createdBy: currentUser ? currentUser.email : "" }));
+    let runningList = projectList;
+    const stamped = rows.map(r => {
+      const projectCode = nextProjectCode(r.stream, runningList);
+      const stampedRow = { ...r, createdBy: currentUser ? currentUser.email : "", projectCode };
+      runningList = [...runningList, stampedRow];
+      return stampedRow;
+    });
     setProjectList(list => [...list, ...stamped]);
     if (supabaseClient) stamped.forEach(row => sbUpsertProject(row));
   };
   const onCreateProjectFieldChange = (field, value) => setCreateProjectForm(f => ({ ...f, [field]: value }));
   const onSubmitCreateProject = () => {
-    if (!norm(createProjectForm.application) || !norm(createProjectForm.project)) {
-      alert("Application and Project are required.");
+    const REQUIRED_FIELDS = [
+      ["application","Application"], ["deliveryModel","Delivery Model"], ["project","Project"],
+      ["resource","Resource"], ["mountain","Mountain"], ["stream","Stream"], ["subStream","Sub Stream"],
+      ["startDate","Start Date"], ["endDate","End Date"], ["tpo","TPO"], ["deliveryLead","Delivery Lead"],
+      ["priority","Priority"], ["phase","Phase"]
+    ];
+    const missing = REQUIRED_FIELDS.filter(([key]) => !norm(createProjectForm[key])).map(([, label]) => label);
+    if (missing.length > 0) {
+      alert(`Please fill in all fields before submitting. Missing: ${missing.join(", ")}`);
       return;
     }
-    const row = { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "" };
+    const projectCode = nextProjectCode(createProjectForm.stream, projectList);
+    const row = { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "", projectCode };
     setProjectList(list => [...list, row]);
     if (supabaseClient) sbUpsertProject(row);
     setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
@@ -3905,9 +3946,9 @@ function AppRoot() {
     });
   }, [projectList, plSortConfig]);
   const onExportProjectList = () => {
-    const header = ["No", ...PL_COLS.map(c => c.label)];
-    const rows = sortedProjectList.map((r, i) => {
-      const row = { No: i+1 };
+    const header = ["Project ID", ...PL_COLS.map(c => c.label)];
+    const rows = sortedProjectList.map(r => {
+      const row = { "Project ID": r.projectCode || "" };
       PL_COLS.forEach(c => { row[c.label] = r[c.key] || ""; });
       return row;
     });
