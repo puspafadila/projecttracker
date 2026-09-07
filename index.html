@@ -824,7 +824,19 @@ function ProjectListTable({ rows, onUpdate, onRemove, sortConfig, onSort, phaseO
       h("div", { style:{ minWidth: showGantt ? fixedW + timelineW : fixedW } },
         h("div", { style:{ display:"flex", position:"sticky", top:0, zIndex:6 } },
           h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:7, background:"#152238" } },
-            h("div", { style:{ width:130, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "Project ID"),
+            h("div", {
+              style:{ width:130, padding:"10px 8px", display:"flex", alignItems:"center", gap:5, userSelect:"none", fontSize:12 }
+            },
+              h("span", {
+                onClick: () => onSort("projectCode"), title:"Click to sort",
+                style:{ color:"#fff", fontWeight:600, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }
+              }, "Project ID"),
+              h("span", { onClick: () => onSort("projectCode"), style:{ cursor:"pointer", display:"flex", flexShrink:0 } },
+                sortConfig.key === "projectCode"
+                  ? (sortConfig.dir === "asc" ? h(Icon.up,{style:{color:"#fff"}}) : h(Icon.down,{style:{color:"#fff"}}))
+                  : h(Icon.updown,{style:{color:"#8B9BB4", opacity:.7}})
+              )
+            ),
             columns.map(c => h(PlHeaderCell, { key:c.key, col:c, sortConfig, onSort,
               filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
               onFilterChange: v => onFilterChange(c.key, v) })),
