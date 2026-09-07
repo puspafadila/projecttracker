@@ -2102,6 +2102,75 @@ function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, on
   );
 }
 
+function CreateUserForm() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("viewOnly");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const extractErrorMessage = async (fnError) => {
+    if (fnError && fnError.context && typeof fnError.context.json === "function") {
+      try { const body = await fnError.context.json(); if (body && body.error) return body.error; } catch (e) {}
+    }
+    return (fnError && fnError.message) || "Failed to create user.";
+  };
+
+  const handleCreate = async () => {
+    setSubmitting(true); setError(""); setSuccess("");
+    try {
+      const { data, error: fnError } = await supabaseClient.functions.invoke("create-user", {
+        body: { email: norm(email).toLowerCase(), password, role }
+      });
+      if (fnError) setError(await extractErrorMessage(fnError));
+      else if (data && data.error) setError(data.error);
+      else {
+        setSuccess(`Account created for ${email}. Share the password with them directly \u2014 it isn't emailed automatically.`);
+        setEmail(""); setPassword("");
+      }
+    } catch (e) {
+      setError(e.message || "Unexpected error.");
+    }
+    setSubmitting(false);
+  };
+
+  return h("div", { className:"card", style:{ padding:20, marginBottom:20 } },
+    h("div", { style:{ fontSize:14, fontWeight:700, color:"#152238", marginBottom:4 } }, "Add New User"),
+    h("div", { style:{ fontSize:12, color:"#64748B", marginBottom:14 } }, "Creates their login account and assigns their role in one step."),
+    h("div", { style:{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" } },
+      h("div", { style:{ flex:"1 1 200px" } },
+        h("label", { style:{ fontSize:11, color:"#64748B", fontWeight:600, display:"block", marginBottom:4 } }, "Email"),
+        h("input", {
+          type:"email", value:email, onChange:e => setEmail(e.target.value), placeholder:"name@company.com",
+          style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px", outline:"none" }
+        })
+      ),
+      h("div", { style:{ flex:"1 1 160px" } },
+        h("label", { style:{ fontSize:11, color:"#64748B", fontWeight:600, display:"block", marginBottom:4 } }, "Password"),
+        h("input", {
+          type:"text", value:password, onChange:e => setPassword(e.target.value), placeholder:"At least 6 characters",
+          style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px", outline:"none" }
+        })
+      ),
+      h("div", { style:{ flex:"0 1 150px" } },
+        h("label", { style:{ fontSize:11, color:"#64748B", fontWeight:600, display:"block", marginBottom:4 } }, "Role"),
+        h("select", {
+          value:role, onChange:e => setRole(e.target.value),
+          style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px", outline:"none", background:"#fff" }
+        },
+          USER_ROLES.map(r => h("option", { key:r.key, value:r.key }, r.label))
+        )
+      ),
+      h("button", {
+        className:"btn btn-primary", onClick:handleCreate, disabled: submitting || !email || !password
+      }, submitting ? "Creating\u2026" : "Create User")
+    ),
+    error && h("div", { style:{ fontSize:12, color:"#DC2626", marginTop:10 } }, error),
+    success && h("div", { style:{ fontSize:12, color:"#166534", marginTop:10 } }, success)
+  );
+}
+
 function UserManagementView({ userManagement, onSaveAll, readOnly }) {
   const [expandedSections, setExpandedSections] = useState({});
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
@@ -2132,6 +2201,7 @@ function UserManagementView({ userManagement, onSaveAll, readOnly }) {
       )
     ),
     readOnly && h(ReadOnlyBanner),
+    !readOnly && h(CreateUserForm),
     h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
       USER_ROLES.map(role => h(UserRoleSection, {
         key: role.key, role, expanded: !!expandedSections[role.key], onToggle: toggleSection,
