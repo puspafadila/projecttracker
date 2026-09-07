@@ -595,16 +595,24 @@ function FilterDropdown({ options, selected, onChange }) {
   const [search, setSearch] = useState("");
   const [pos, setPos] = useState({ top:0, left:0 });
   const btnRef = useRef(null);
+  const panelRef = useRef(null);
 
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
+    // Scrolling the options list inside the dropdown itself must NOT close
+    // it — only scrolling something else (the page/table behind it, which
+    // would leave the dropdown floating in the wrong spot) should.
+    const handleScroll = e => {
+      if (panelRef.current && panelRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener("click", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", handleScroll, true);
     window.addEventListener("resize", close);
     return () => {
       document.removeEventListener("click", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", handleScroll, true);
       window.removeEventListener("resize", close);
     };
   }, [open]);
@@ -633,6 +641,7 @@ function FilterDropdown({ options, selected, onChange }) {
         color: isActive ? "#5EEAD4" : "#B7C3D6" }
     }, h(Icon.filter,{})),
     open && h("div", {
+      ref: panelRef,
       style:{ position:"fixed", top:pos.top, left:pos.left, zIndex:100, background:"#fff", color:"#1E293B",
         border:"1px solid #E2E8F0", borderRadius:10, boxShadow:"0 10px 25px rgba(0,0,0,0.18)", width:216,
         display:"flex", flexDirection:"column" },
