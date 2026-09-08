@@ -1197,15 +1197,20 @@ function ColumnManager({ columnOrder, hiddenColumns, onToggleVisibility, onReord
   );
 }
 
-function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onSort, picListId, showGantt, currentUser, phaseOptions }) {
+function TaskTable({ tasks, onUpdateTask, onRemoveTask, onReorderTask, columns, sortConfig, onSort, picListId, showGantt, currentUser, phaseOptions }) {
   const [filters, setFilters] = useState({});
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
   const ganttRange = useMemo(() => computeGanttRange(tasks), [tasks]);
   const weekCells = useMemo(() => buildWeekCells(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
   const monthTicks = useMemo(() => buildMonthTicks(ganttRange.epoch, ganttRange.totalWeeks), [ganttRange]);
   const timelineW = ganttRange.totalWeeks * WEEK_W;
   const todayIdx = weekIndexFor(new Date().toISOString().slice(0,10), ganttRange.epoch, ganttRange.totalWeeks);
-  const fixedW = 44 + columns.reduce((s,c)=>s+c.width,0) + 40;
+  const fixedW = 66 + columns.reduce((s,c)=>s+c.width,0) + 40;
   const colKeys = useMemo(() => columns.map(c => c.key), [columns]);
+  // Dragging reorders the underlying list, which only means anything when
+  // rows aren't currently re-arranged by a column sort.
+  const canDrag = !sortConfig.key;
 
   const columnOptions = useMemo(() => buildColumnOptions(tasks, colKeys), [tasks, colKeys]);
   const onFilterChange = (colKey, selected) => setFilters(f => ({ ...f, [colKey]: selected }));
@@ -1219,11 +1224,12 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onS
       `${activeFilterCount} active filter(s) \u00B7 showing ${filteredTasks.length} of ${tasks.length} tasks`,
       h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Clear all filters")
     ),
+    !canDrag && h("div", { style:{ fontSize:11, color:"#94A3B8", marginBottom:8 } }, "Clear the column sort to drag-and-drop reorder rows."),
     h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12 } },
       h("div", { style:{ minWidth: showGantt ? fixedW + timelineW : fixedW } },
         h("div", { style:{ display:"flex", position:"sticky", top:0, zIndex:6 } },
           h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:7, background:"#152238" } },
-            h("div", { style:{ width:44, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "No"),
+            h("div", { style:{ width:66, padding:"10px 8px", color:"#fff", fontSize:12, fontWeight:600 } }, "No"),
             columns.map(c => h(SortableHeaderCell, { key:c.key, col:c, sortConfig, onSort,
               filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
               onFilterChange: v => onFilterChange(c.key, v) })),
@@ -1240,11 +1246,27 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, columns, sortConfig, onS
           filteredTasks.length === 0
             ? h("div", { style:{ padding:"36px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "No tasks match the filter.")
             : filteredTasks.map((task, i) => {
-              const rowBg = i % 2 === 0 ? "#fff" : "#FAFBFC";
+              const rowBg = dragOverId === task.id ? "#EAF1F8" : (i % 2 === 0 ? "#fff" : "#FAFBFC");
               const editable = canModifyRecord(task, currentUser);
-              return h("div", { key:task.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg } },
+              const canDragRow = canDrag && editable;
+              return h("div", {
+                key:task.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg, opacity: dragId === task.id ? 0.5 : 1 },
+                onDragOver: canDragRow ? e => { e.preventDefault(); if (dragOverId !== task.id) setDragOverId(task.id); } : undefined,
+                onDrop: canDragRow ? e => { e.preventDefault(); if (dragId) onReorderTask(dragId, task.id); setDragId(null); setDragOverId(null); } : undefined,
+                onDragLeave: canDragRow ? () => setDragOverId(id => id === task.id ? null : id) : undefined
+              },
                 h("div", { style:{ display:"flex", position:"sticky", left:0, zIndex:2, background:rowBg } },
-                  h("div", { style:{ width:44, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center" } }, task.no),
+                  h("div", { style:{ width:66, padding:"6px 8px", fontSize:13, color:"#64748B", display:"flex", alignItems:"center", gap:4 } },
+                    canDragRow
+                      ? h("span", {
+                          draggable:true, title:"Drag to reorder",
+                          onDragStart: e => { setDragId(task.id); e.dataTransfer.effectAllowed = "move"; },
+                          onDragEnd: () => { setDragId(null); setDragOverId(null); },
+                          style:{ display:"flex", cursor:"grab", color:"#CBD5E1", flexShrink:0 }
+                        }, h(Icon.grip,{}))
+                      : h("span", { style:{ width:14, flexShrink:0 } }),
+                    task.no
+                  ),
                   columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px", display:"flex", alignItems:"center", minHeight:34 } },
                     editable ? cellEditor(c.key, task, (field, val) => onUpdateTask(task.id, field, val), picListId, phaseOptions) : cellDisplayReadOnly(c.key, task, phaseOptions)
                   )),
@@ -1319,12 +1341,15 @@ function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected
   );
 }
 
-function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, currentUser }) {
+function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picListId, currentUser }) {
   const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
   const [filters, setFilters] = useState({});
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
   const visibleCols = TODO_COLS.filter(c => c.key === "task" || !hiddenColumns.includes(c.key));
   const colKeys = useMemo(() => visibleCols.map(c => c.key), [visibleCols]);
   const tdStyle = { padding:"7px 10px", borderBottom:"1px solid #F1F5F9" };
+  const canDrag = !sortConfig.key;
 
   const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
   const onFilterChange = (k, v) => setFilters(f => ({ ...f, [k]: v }));
@@ -1351,10 +1376,12 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
       `${activeFilterCount} active filter(s) \u00B7 showing ${sorted.length} of ${todos.length} Tasks`,
       h("button", { onClick:clearAllFilters, style:{ color:"#1E3A5F", background:"none", border:"none", fontSize:12, fontWeight:600, textDecoration:"underline", padding:0, cursor:"pointer" } }, "Clear all filters")
     ),
+    !canDrag && h("div", { style:{ fontSize:11, color:"#94A3B8", marginBottom:8 } }, "Clear the column sort to drag-and-drop reorder rows."),
     h("div", { style:{ border:"1px solid #E2E8F0", borderRadius:12, overflow:"auto" } },
       h("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
         h("thead", null,
           h("tr", { style:{ background:"#152238" } },
+            h("th", { style:{ width:24, background:"#152238" } }),
             h("th", { style:{ width:36, background:"#152238" } }),
             visibleCols.map(c => h(TodoHeaderCell, { key:c.key, col:c, sortConfig, onSort,
               filterOptions: columnOptions[c.key] || [], filterSelected: filters[c.key] || null,
@@ -1364,10 +1391,29 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
         ),
         h("tbody", null,
           todos.length === 0
-            ? h("tr", null, h("td", { colSpan: visibleCols.length + 2, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks yet. Click "Add Task".'))
+            ? h("tr", null, h("td", { colSpan: visibleCols.length + 3, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks yet. Click "Add Task".'))
           : sorted.length === 0
-            ? h("tr", null, h("td", { colSpan: visibleCols.length + 2, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks match the filter.'))
-          : sorted.map((t, i) => h("tr", { key:t.id, style:{ background: t.flagged ? "#FFF7ED" : (i%2===0 ? "#fff" : "#FAFBFC") } },
+            ? h("tr", null, h("td", { colSpan: visibleCols.length + 3, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks match the filter.'))
+          : sorted.map((t, i) => {
+              const editable = canModifyRecord(t, currentUser);
+              const canDragRow = canDrag && editable;
+              return h("tr", {
+                key:t.id,
+                style:{ background: dragOverId === t.id ? "#EAF1F8" : (t.flagged ? "#FFF7ED" : (i%2===0 ? "#fff" : "#FAFBFC")), opacity: dragId === t.id ? 0.5 : 1 },
+                onDragOver: canDragRow ? e => { e.preventDefault(); if (dragOverId !== t.id) setDragOverId(t.id); } : undefined,
+                onDrop: canDragRow ? e => { e.preventDefault(); if (dragId) onReorder(dragId, t.id); setDragId(null); setDragOverId(null); } : undefined,
+                onDragLeave: canDragRow ? () => setDragOverId(id => id === t.id ? null : id) : undefined
+              },
+              h("td", { style:{ ...tdStyle, textAlign:"center", width:24 } },
+                canDragRow
+                  ? h("span", {
+                      draggable:true, title:"Drag to reorder",
+                      onDragStart: e => { setDragId(t.id); e.dataTransfer.effectAllowed = "move"; },
+                      onDragEnd: () => { setDragId(null); setDragOverId(null); },
+                      style:{ display:"inline-flex", cursor:"grab", color:"#CBD5E1" }
+                    }, h(Icon.grip,{}))
+                  : null
+              ),
               h("td", { style:{ ...tdStyle, textAlign:"center", width:36 } },
                 canModifyRecord(t, currentUser)
                   ? h("button", {
@@ -1398,7 +1444,8 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
                   ? h("button", { onClick:()=>onRemove(t.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
                   : h(OwnerLockNote, { record: t })
               )
-            ))
+              );
+            })
         )
       )
     )
@@ -1510,6 +1557,19 @@ function DetailView({
   };
   const draftUpdateTask = (taskId, field, value) => { setDraftTasks(list => list.map(t => t.id===taskId ? { ...t, [field]:value } : t)); markDirty(); };
   const draftRemoveTask = taskId => { setDraftTasks(list => list.filter(t => t.id!==taskId)); markDirty(); };
+  const draftReorderTask = (dragId, dropId) => {
+    if (!canAddToProject || dragId === dropId) return;
+    setDraftTasks(list => {
+      const arr = [...list];
+      const from = arr.findIndex(t => t.id === dragId), to = arr.findIndex(t => t.id === dropId);
+      if (from === -1 || to === -1) return list;
+      const [moved] = arr.splice(from, 1);
+      arr.splice(to, 0, moved);
+      // Renumber "No" to match the new order, same as it does when tasks are added.
+      return arr.map((t, i) => ({ ...t, no: String(i + 1) }));
+    });
+    markDirty();
+  };
   const draftImportTasks = newTasks => {
     if (!canAddToProject) return;
     setDraftTasks(list => [...list, ...newTasks.map(t => ({ ...t, createdBy: currentUser ? currentUser.email : "" }))]);
@@ -1523,6 +1583,18 @@ function DetailView({
   };
   const draftUpdateTodo = (todoId, field, value) => { setDraftTodos(list => list.map(t => t.id===todoId ? { ...t, [field]:value } : t)); markDirty(); };
   const draftRemoveTodo = todoId => { setDraftTodos(list => list.filter(t => t.id!==todoId)); markDirty(); };
+  const draftReorderTodo = (dragId, dropId) => {
+    if (!canAddToProject || dragId === dropId) return;
+    setDraftTodos(list => {
+      const arr = [...list];
+      const from = arr.findIndex(t => t.id === dragId), to = arr.findIndex(t => t.id === dropId);
+      if (from === -1 || to === -1) return list;
+      const [moved] = arr.splice(from, 1);
+      arr.splice(to, 0, moved);
+      return arr;
+    });
+    markDirty();
+  };
 
   const draftUpdateProjectField = (field, value) => { setDraftProjectFields(f => ({ ...f, [field]:value })); markDirty(); };
 
@@ -1531,10 +1603,12 @@ function DetailView({
   const effAddTask = useDraft ? draftAddTask : () => {};
   const effUpdateTask = useDraft ? draftUpdateTask : () => {};
   const effRemoveTask = useDraft ? draftRemoveTask : () => {};
+  const effReorderTask = useDraft ? draftReorderTask : () => {};
   const effImportTasks = useDraft ? draftImportTasks : () => {};
   const effAddTodo = useDraft ? draftAddTodo : () => {};
   const effUpdateTodo = useDraft ? draftUpdateTodo : () => {};
   const effRemoveTodo = useDraft ? draftRemoveTodo : () => {};
+  const effReorderTodo = useDraft ? draftReorderTodo : () => {};
 
   const commit = () => {
     onCommitRecord(draftTasks, draftTodos);
@@ -1676,7 +1750,7 @@ function DetailView({
       sortedTasks.length === 0
         ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } },
             canAddToProject ? 'No tasks yet. Click "Add Task" or import from an Excel file.' : "No tasks yet.")
-        : h(TaskTable, { tasks: sortedTasks, onUpdateTask: effUpdateTask, onRemoveTask: effRemoveTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser, phaseOptions })
+        : h(TaskTable, { tasks: sortedTasks, onUpdateTask: effUpdateTask, onRemoveTask: effRemoveTask, onReorderTask: effReorderTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser, phaseOptions })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
@@ -1689,7 +1763,7 @@ function DetailView({
             h(Icon.plus,{}), "Add Task")
         )
       ),
-      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onRemove: effRemoveTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser })
+      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onRemove: effRemoveTodo, onReorder: effReorderTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
