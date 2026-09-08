@@ -122,7 +122,8 @@ async function fetchAllFromSupabase() {
       application: p.application || "", deliveryModel: p.delivery_model || "", project: p.project || "",
       resource: p.resource || "", startDate: p.start_date || "", endDate: p.end_date || "",
       tpo: p.tpo || "", deliveryLead: p.delivery_lead || "", priority: p.priority || "", phase: p.phase || "",
-      createdBy: p.created_by || "", projectCode: p.project_code || ""
+      createdBy: p.created_by || "", projectCode: p.project_code || "",
+      goLivePlan: p.go_live_plan || "", goLiveActual: p.go_live_actual || ""
     };
   });
 
@@ -218,7 +219,8 @@ async function sbUpsertProject(row) {
     resource: row.resource || null, start_date: row.startDate || null, end_date: row.endDate || null,
     tpo: row.tpo || null, delivery_lead: row.deliveryLead || null, priority: row.priority || null,
     phase: row.phase || null, created_by: row.createdBy || null,
-    project_code: row.projectCode || null
+    project_code: row.projectCode || null,
+    go_live_plan: row.goLivePlan || null, go_live_actual: row.goLiveActual || null
   }, { onConflict:"id" });
   return sqError("upsert project", error);
 }
@@ -717,6 +719,8 @@ const PL_COLS = [
   { key:"deliveryLead", label:"Delivery Lead", width:160 },
   { key:"priority", label:"Priority", width:104 },
   { key:"phase", label:"Phase", width:150 },
+  { key:"goLivePlan", label:"Go Live Plan", width:126 },
+  { key:"goLiveActual", label:"Go Live Actual", width:126 },
 ];
 
 function StaticBadge({ value, bgMap, fgMap }) {
@@ -747,6 +751,8 @@ function plCellDisplay(colKey, row, phaseMeta, onOpenWizard) {
     case "deliveryLead": return h("span", { style:textStyle }, row.deliveryLead || "\u2014");
     case "priority": return h(StaticBadge, { value: row.priority, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG });
     case "phase": return h(StaticBadge, { value: row.phase, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg });
+    case "goLivePlan": return h("span", { style:{ ...textStyle, fontSize:12 } }, row.goLivePlan || "\u2014");
+    case "goLiveActual": return h("span", { style:{ ...textStyle, fontSize:12 } }, row.goLiveActual || "\u2014");
     default: return null;
   }
 }
@@ -771,8 +777,8 @@ function plCellEditor(colKey, row, onUpdate, phaseMeta, masterOptions, onOpenWiz
         )
       : h("input", { value: row.project||"", onChange:e=>onUpdate("project", e.target.value), placeholder:"Project name\u2026", style:textStyle });
     case "resource": return h("input", { value: row.resource||"", onChange:e=>onUpdate("resource", e.target.value), placeholder:"Resource name\u2026", style:textStyle });
-    case "startDate": return h("input", { type:"date", value: row.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
-    case "endDate": return h("input", { type:"date", value: row.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
+    case "startDate": return h(DateInput, { value: row.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
+    case "endDate": return h(DateInput, { value: row.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
     case "tpo": return h("input", { value: row.tpo||"", onChange:e=>onUpdate("tpo", e.target.value), placeholder:"TPO name", style:textStyle });
     case "deliveryLead": return h("input", { value: row.deliveryLead||"", onChange:e=>onUpdate("deliveryLead", e.target.value), placeholder:"Delivery Lead name", style:textStyle });
     case "priority": return h(RagSelect, { value: row.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
@@ -950,7 +956,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
           PL_COLS.forEach(c => {
             const compact = c.label.replace(/\s+/g, "");
             const raw = pick(row, c.label, compact);
-            obj[c.key] = (c.key === "startDate" || c.key === "endDate") ? toISODate(raw) : String(raw || "");
+            obj[c.key] = ["startDate","endDate","goLivePlan","goLiveActual"].includes(c.key) ? toISODate(raw) : String(raw || "");
           });
           obj.createdBy = currentUser ? currentUser.email : "";
           return obj;
@@ -1106,8 +1112,8 @@ function cellEditor(colKey, task, onUpdate, picListId, phaseOptions) {
   const dateStyle = { width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"5px 6px", outline:"none" };
   switch (colKey) {
     case "task": return h("input", { value: task.task||"", onChange:e=>onUpdate("task", e.target.value), placeholder:"Nama task\u2026", style:textStyle });
-    case "startDate": return h("input", { type:"date", value: task.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
-    case "endDate": return h("input", { type:"date", value: task.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
+    case "startDate": return h(DateInput, { value: task.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
+    case "endDate": return h(DateInput, { value: task.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
     case "pic": return h("input", { value: task.pic||"", onChange:e=>onUpdate("pic", e.target.value), list:picListId, placeholder:"PIC", style:textStyle });
     case "status": return h(RagSelect, { value: task.status, options: STATUS_OPTS, bgMap: STATUS_BG, fgMap: STATUS_FG, strikeValues:["Cancelled"], onChange: v => onUpdate("status", v) });
     case "priority": return h(RagSelect, { value: task.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
@@ -1381,7 +1387,7 @@ function TodoTable({ todos, onUpdate, onRemove, hiddenColumns, picListId, curren
                     style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
                 c.key === "pic" ? h("input", { value:t.pic||"", onChange:e=>onUpdate(t.id,"pic",e.target.value), list:picListId, placeholder:"PIC",
                     style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
-                c.key === "dueDate" ? h("input", { type:"date", value:t.dueDate||"", onChange:e=>onUpdate(t.id,"dueDate",e.target.value),
+                c.key === "dueDate" ? h(DateInput, { value:t.dueDate||"", onChange:e=>onUpdate(t.id,"dueDate",e.target.value),
                     style:{ width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
                 c.key === "status" ? h(RagSelect, { value:t.status, options: TODO_STATUS_OPTS, bgMap: STATUS_BG, fgMap: STATUS_FG, strikeValues:["Cancelled"], onChange:v=>onUpdate(t.id,"status",v) }) :
                 c.key === "blocker" ? h(RagSelect, { value:t.blocker, options: TODO_BLOCKER_OPTS, bgMap: TODO_BLOCKER_BG, fgMap: TODO_BLOCKER_FG, onChange:v=>onUpdate(t.id,"blocker",v) }) :
@@ -2031,6 +2037,23 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
   const [draft, setDraft] = useState(masterData);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { if (!dirty) setDraft(masterData); }, [masterData]);
+  const fileInputRef = useRef(null);
+  const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
+
+  const onExportMasterData = () => {
+    const header = MASTER_DATA_CATEGORIES.map(c => c.label);
+    const cols = MASTER_DATA_CATEGORIES.map(c => draft[c.key] || []);
+    const maxLen = Math.max(0, ...cols.map(c => c.length));
+    const aoa = [header];
+    for (let i = 0; i < maxLen; i++) {
+      aoa.push(cols.map(c => c[i] || ""));
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = header.map(hLabel => ({ wch: Math.max(14, Math.min(40, hLabel.length + 6)) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Master Data");
+    XLSX.writeFile(wb, `Master_Data_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
 
   const onAddItem = catKey => { setDraft(d => ({ ...d, [catKey]: [...((d && d[catKey]) || []), ""] })); setDirty(true); };
   const onUpdateItem = (catKey, idx, value) => {
@@ -2043,18 +2066,87 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
   };
   const handleSave = () => { onSaveAll(draft); setDirty(false); };
 
+  const handleImportFile = e => {
+    if (readOnly) { e.target.value = ""; return; }
+    const file = e.target.files[0];
+    if (!file) { e.target.value = ""; return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = new Uint8Array(ev.target.result);
+        const wb = XLSX.read(data, { type:"array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval:"", header:1 });
+        if (!rows.length) { alert("The file is empty."); return; }
+        const headerRow = rows[0].map(h => norm(String(h)));
+        const colIndexByCat = {};
+        MASTER_DATA_CATEGORIES.forEach(cat => {
+          const idx = headerRow.findIndex(h => h.toLowerCase() === cat.label.toLowerCase());
+          if (idx !== -1) colIndexByCat[cat.key] = idx;
+        });
+        const foundCats = Object.keys(colIndexByCat);
+        if (foundCats.length === 0) {
+          alert(`No matching columns found. Expected one or more of: ${MASTER_DATA_CATEGORIES.map(c => c.label).join(", ")}`);
+          return;
+        }
+
+        const addedCounts = {};
+        setDraft(d => {
+          const next = { ...d };
+          foundCats.forEach(catKey => {
+            const colIdx = colIndexByCat[catKey];
+            const existing = next[catKey] || [];
+            const existingLower = new Set(existing.map(v => norm(v).toLowerCase()));
+            const seenInFile = new Set();
+            const toAdd = [];
+            for (let r = 1; r < rows.length; r++) {
+              const raw = norm(String(rows[r][colIdx] || ""));
+              if (!raw) continue;
+              const lower = raw.toLowerCase();
+              if (existingLower.has(lower) || seenInFile.has(lower)) continue;
+              seenInFile.add(lower);
+              toAdd.push(raw);
+            }
+            if (toAdd.length) { next[catKey] = [...existing, ...toAdd]; addedCounts[catKey] = toAdd.length; }
+          });
+          return next;
+        });
+        setDirty(true);
+
+        const summary = MASTER_DATA_CATEGORIES
+          .filter(c => addedCounts[c.key])
+          .map(c => `${c.label}: +${addedCounts[c.key]}`)
+          .join("\n");
+        alert(summary
+          ? `Import complete. New values added (click Save to keep them):\n\n${summary}`
+          : "No new values found \u2014 everything in the file already exists."
+        );
+      } catch (err) {
+        alert("Failed to read the file. Make sure it's a valid .xlsx file with one column per category (Phase, Mountain, Stream, Sub Stream, Applications, Delivery Model).");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
       h("div", null,
         h("h1", { style:{ fontSize:22, fontWeight:700, color:"#152238", margin:0 } }, "Master Data Management"),
         h("p", { style:{ fontSize:13, color:"#64748B", margin:"4px 0 0" } }, "Manage the master data lists used across the app: Phase, Mountain, Stream & Sub-Stream, Applications, and Delivery Model.")
       ),
-      !readOnly && h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
-        dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes"),
-        h("button", { className:"btn btn-primary", onClick:handleSave, disabled:!dirty }, "Save")
+      h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+        !readOnly && dirty && h("span", { style:{ fontSize:12, color:"#C2410C", fontWeight:600 } }, "You have unsaved changes"),
+        h("button", { className:"btn btn-outline", onClick:onExportMasterData }, h(Icon.download,{}), "Export"),
+        !readOnly && h("button", { className:"btn", onClick:triggerImport }, h(Icon.upload,{}), "Import"),
+        !readOnly && h("input", { ref:fileInputRef, type:"file", accept:".xlsx,.xls", onChange:handleImportFile, style:{ display:"none" } }),
+        !readOnly && h("button", { className:"btn btn-primary", onClick:handleSave, disabled:!dirty }, "Save")
       )
     ),
     readOnly && h(ReadOnlyBanner),
+    !readOnly && h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:16 } },
+      `Import format: an .xlsx file with one column per category, header row using these exact names: ${MASTER_DATA_CATEGORIES.map(c => c.label).join(", ")}. New values are added to the existing lists (duplicates are skipped) \u2014 nothing is removed.`
+    ),
     h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
       MASTER_DATA_CATEGORIES.map(cat => h(MasterDataSection, {
         key: cat.key, category: cat, expanded: !!expandedSections[cat.key], onToggle: toggleSection,
@@ -2562,12 +2654,34 @@ function ReadOnlyBanner() {
 /* =========================================================================
    CREATE PROJECT (form styled like the PMO document templates)
    ========================================================================= */
-function CreateProjectField({ label, children }) {
+function CreateProjectField({ label, children, required = true }) {
   return h("div", { style:{ padding:"14px 16px", display:"flex", flexDirection:"column", gap:6 } },
     h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E293B", textDecoration:"underline", textUnderlineOffset:"2px" } },
-      label, h("span", { style:{ color:"#DC2626" } }, " *")
+      label, required && h("span", { style:{ color:"#DC2626" } }, " *")
     ),
     children
+  );
+}
+
+/* ISO-8601 week number for a "YYYY-MM-DD" date string (weeks start Monday,
+   week 1 is the week containing the year's first Thursday). */
+function isoWeekOf(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+}
+/* A date <input> that also shows "Wk N" next to it — the browser's native
+   calendar popup itself can't be customized to show week numbers (that's
+   controlled by the OS/browser, not by the page), so this is shown
+   alongside the field instead once a date is picked. */
+function DateInput({ value, onChange, style, disabled }) {
+  const week = isoWeekOf(value);
+  return h("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
+    h("input", { type:"date", value: value || "", onChange, disabled, style:{ ...style, flex:1, minWidth:0 } }),
+    week && h("span", { style:{ fontSize:10, color:"#94A3B8", flexShrink:0, whiteSpace:"nowrap" } }, `Wk ${week}`)
   );
 }
 
@@ -2614,10 +2728,10 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
           h(MasterDataSelect, { value: form.subStream, options: subStreamOptions, onChange: v => onFieldChange("subStream", v), style:inputStyle }))),
       h("div", { style:{ background:"#DCE9F7", borderBottom:cellBorder } },
         h(CreateProjectField, { label:"Start Date" },
-          h("input", { type:"date", value: form.startDate, onChange:e => onFieldChange("startDate", e.target.value), style:inputStyle }))),
+          h(DateInput, { value: form.startDate, onChange:e => onFieldChange("startDate", e.target.value), style:inputStyle }))),
       h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
         h(CreateProjectField, { label:"End Date" },
-          h("input", { type:"date", value: form.endDate, onChange:e => onFieldChange("endDate", e.target.value), style:inputStyle }))),
+          h(DateInput, { value: form.endDate, onChange:e => onFieldChange("endDate", e.target.value), style:inputStyle }))),
       h("div", { style:{ background:"#EAF1F8", borderBottom:cellBorder } },
         h(CreateProjectField, { label:"TPO" },
           h("input", { value: form.tpo, onChange:e => onFieldChange("tpo", e.target.value), placeholder:"TPO name", style:inputStyle }))),
@@ -2630,7 +2744,13 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
       h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder } },
         h(CreateProjectField, { label:"Phase" },
           h(RagSelect, { value: form.phase, options: phaseMeta.options, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg, onChange: v => onFieldChange("phase", v) }))),
-      h("div", { style:{ background:"#EAF1F8" } })
+      h("div", { style:{ background:"#EAF1F8" } },
+        h(CreateProjectField, { label:"Go Live Plan" },
+          h(DateInput, { value: form.goLivePlan || "", onChange:e => onFieldChange("goLivePlan", e.target.value), style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderTop:cellBorder } },
+        h(CreateProjectField, { label:"Go Live Actual", required:false },
+          h(DateInput, { value: form.goLiveActual || "", onChange:e => onFieldChange("goLiveActual", e.target.value), style:inputStyle }))),
+      h("div", { style:{ background:"#DCE9F7", borderTop:cellBorder } })
     ),
     (onCancel || onSubmit) && h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", gap:10, borderTop:cellBorder } },
       onCancel && h("button", { className:"btn", onClick:onCancel }, "Cancel"),
@@ -2658,7 +2778,8 @@ function extractProjectFields(row) {
     mountain: (row && row.mountain) || "", stream: (row && row.stream) || "", subStream: (row && row.subStream) || "",
     startDate: (row && row.startDate) || "", endDate: (row && row.endDate) || "",
     tpo: (row && row.tpo) || "", deliveryLead: (row && row.deliveryLead) || "",
-    priority: (row && row.priority) || "", phase: (row && row.phase) || ""
+    priority: (row && row.priority) || "", phase: (row && row.phase) || "",
+    goLivePlan: (row && row.goLivePlan) || "", goLiveActual: (row && row.goLiveActual) || ""
   };
 }
 
@@ -2815,7 +2936,9 @@ function EditableLogTable({ columns, rows, onAdd, onUpdate, onRemove, currentUse
                     ? h("span", { style:{ fontSize:13, color:"#334155" } }, row[c.key] || "\u2014")
                     : c.type === "select"
                     ? h(MasterDataSelect, { value: row[c.key], options: c.options, onChange: v => onUpdate(row.id, c.key, v), style:inputStyle })
-                    : h("input", { type: c.type === "date" ? "date" : "text", value: row[c.key] || "", onChange:e => onUpdate(row.id, c.key, e.target.value), style:inputStyle })
+                    : c.type === "date"
+                    ? h(DateInput, { value: row[c.key] || "", onChange:e => onUpdate(row.id, c.key, e.target.value), style:inputStyle })
+                    : h("input", { type:"text", value: row[c.key] || "", onChange:e => onUpdate(row.id, c.key, e.target.value), style:inputStyle })
                 )),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", textAlign:"center" } },
                   editable
@@ -3065,9 +3188,10 @@ function StatCard({ label, value, sub, color }) {
 }
 
 /* A project counts as "completed" once its Phase is 6 (Hypercare), 60
-   (Closing), 61 (Cancelled), or 62 (Hold) — matched by the leading number
-   in the Phase value (e.g. "60 - Closing" -> "60"). */
-const COMPLETED_PHASE_CODES = ["6", "60", "61", "62"];
+   (Closing), or 61 (Cancelled) — matched by the leading number in the
+   Phase value (e.g. "60 - Closing" -> "60"). Phase 62 (Hold) is
+   deliberately excluded — a project on hold isn't finished. */
+const COMPLETED_PHASE_CODES = ["6", "60", "61"];
 function isCompletedPhase(phaseValue) {
   const m = norm(phaseValue).match(/^(\d+)/);
   return !!(m && COMPLETED_PHASE_CODES.includes(m[1]));
@@ -3299,9 +3423,9 @@ function DashboardReportView({ projectList, records }) {
       ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "No projects yet. Add one via the \"Create Project\" menu.")
       : h("div", null,
           h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
-            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.totalProjects} projects at Hypercare/Closing/Cancelled/Hold Phase` }),
+            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.totalProjects} projects at Hypercare/Closing/Cancelled Phase` }),
             h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
-            h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61/62" : "None right now" })
+            h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61" : "None right now" })
           ),
 
           streamReports.map(sr => h("div", { key:sr.streamName, className:"card", style:{ marginBottom:16 } },
@@ -3636,7 +3760,7 @@ function AppRoot() {
   const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient); // checking for an existing session
   const [dataLoading, setDataLoading] = useState(false); // fetching app data, only once logged in
   const remoteHydrated = useRef(false);
-  const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
+  const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"", goLivePlan:"", goLiveActual:"" });
   const [cmApplicationText, setCmApplicationText] = useState(stored.lastCmApplication || "");
   const [cmProjectText, setCmProjectText] = useState(stored.lastCmProject || "");
   const [changeManagementRecords, setChangeManagementRecords] = useState(stored.changeManagementRecords || {});
@@ -3928,7 +4052,7 @@ function AppRoot() {
       ["application","Application"], ["deliveryModel","Delivery Model"], ["project","Project"],
       ["resource","Resource"], ["mountain","Mountain"], ["stream","Stream"], ["subStream","Sub Stream"],
       ["startDate","Start Date"], ["endDate","End Date"], ["tpo","TPO"], ["deliveryLead","Delivery Lead"],
-      ["priority","Priority"], ["phase","Phase"]
+      ["priority","Priority"], ["phase","Phase"], ["goLivePlan","Go Live Plan"]
     ];
     const missing = REQUIRED_FIELDS.filter(([key]) => !norm(createProjectForm[key])).map(([, label]) => label);
     if (missing.length > 0) {
@@ -3939,7 +4063,7 @@ function AppRoot() {
     const row = { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "", projectCode };
     setProjectList(list => [...list, row]);
     if (supabaseClient) sbUpsertProject(row);
-    setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"" });
+    setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"", goLivePlan:"", goLiveActual:"" });
     setActiveView("list");
   };
 
