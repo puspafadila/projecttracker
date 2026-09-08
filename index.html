@@ -90,7 +90,7 @@ async function fetchAllFromSupabase() {
   if (!supabaseClient) return null;
   const [projectsRes, tasksRes, todosRes, updatesRes, charterRes, cmNotesRes,
     crRes, stakeholderRes, benefitRes, depRes, riskRes, lessonsRes, docsRes,
-    masterRes, rolesRes, weeklyRes] = await Promise.all([
+    masterRes, rolesRes, weeklyRes, activityRes] = await Promise.all([
     supabaseClient.from("projects").select("*").is("deleted_at", null),
     supabaseClient.from("tasks").select("*"),
     supabaseClient.from("todos").select("*"),
@@ -107,8 +107,9 @@ async function fetchAllFromSupabase() {
     supabaseClient.from("master_data_items").select("*"),
     supabaseClient.from("user_roles").select("*"),
     supabaseClient.from("weekly_reports").select("*"),
+    supabaseClient.from("activity_log").select("*").order("changed_at", { ascending:false }),
   ]);
-  const errs = [projectsRes, tasksRes, todosRes, updatesRes, charterRes, cmNotesRes, crRes, stakeholderRes, benefitRes, depRes, riskRes, lessonsRes, docsRes, masterRes, rolesRes, weeklyRes].find(r => r.error);
+  const errs = [projectsRes, tasksRes, todosRes, updatesRes, charterRes, cmNotesRes, crRes, stakeholderRes, benefitRes, depRes, riskRes, lessonsRes, docsRes, masterRes, rolesRes, weeklyRes, activityRes].find(r => r.error);
   if (errs) { console.error("Supabase fetch failed:", errs.error.message || errs.error); return null; }
 
   const projects = projectsRes.data || [];
@@ -184,7 +185,11 @@ async function fetchAllFromSupabase() {
   });
 
   const userManagement = { superAdmin:[], tpo:[], pmo:[], bpo:[], viewOnly:[] };
-  (rolesRes.data || []).forEach(r => { if (userManagement[r.role]) userManagement[r.role].push(r.email); });
+  (rolesRes.data || []).forEach(r => {
+    if (!userManagement[r.role]) return;
+    const isStreamRole = r.role === "tpo" || r.role === "pmo";
+    userManagement[r.role].push(isStreamRole ? { email:r.email, stream:r.stream || "" } : r.email);
+  });
 
   const weeklyReports = (weeklyRes.data || []).map(r => ({
     id:r.id, generatedDate:r.generated_date, stream:r.stream, generatedBy:r.generated_by || "",
@@ -192,7 +197,11 @@ async function fetchAllFromSupabase() {
     snapshots:r.snapshots || []
   }));
 
-  return { projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports };
+  const activityLog = (activityRes.data || []).map(r => ({
+    id:r.id, projectId:r.project_id, page:r.page, changedBy:r.changed_by || "", changedAt:r.changed_at, summary:r.summary
+  }));
+
+  return { projectList, records, baselineRecords, changeManagementRecords, masterData, userManagement, weeklyReports, activityLog };
 }
 
 /* Any change to any of the 16 tables just triggers a full refetch+rebuild
@@ -202,7 +211,7 @@ function subscribeSupabaseChanges(onChange) {
   if (!supabaseClient) return () => {};
   const tables = ["projects","tasks","todos","project_updates","project_charter","change_management_notes",
     "change_request_log","stakeholder_register","benefit_register","dependency_log","risk_log","lessons_learned",
-    "pmo_documents","master_data_items","user_roles","weekly_reports"];
+    "pmo_documents","master_data_items","user_roles","weekly_reports","activity_log"];
   let timer = null;
   const trigger = () => { clearTimeout(timer); timer = setTimeout(onChange, 300); };
   const channel = supabaseClient.channel("normalized_changes");
@@ -329,14 +338,18 @@ async function sbSaveUserManagement(userManagement) {
   if (sqError("clear user roles", delErr) === false) return false;
   const rows = [];
   Object.keys(userManagement).forEach(role => {
-    (userManagement[role] || []).forEach(email => { if (norm(email)) rows.push({ email: norm(email).toLowerCase(), role }); });
+    (userManagement[role] || []).forEach(item => {
+      const email = typeof item === "string" ? item : (item && item.email) || "";
+      const stream = typeof item === "string" ? null : ((item && item.stream) || null);
+      if (norm(email)) rows.push({ email: norm(email).toLowerCase(), role, stream });
+    });
   });
   if (!rows.length) return true;
   const { error } = await supabaseClient.from("user_roles").insert(rows);
   return sqError("save user roles", error);
 }
-async function sbInsertUserRole(email, role) {
-  const { error } = await supabaseClient.from("user_roles").upsert({ email: norm(email).toLowerCase(), role }, { onConflict:"email" });
+async function sbInsertUserRole(email, role, stream) {
+  const { error } = await supabaseClient.from("user_roles").upsert({ email: norm(email).toLowerCase(), role, stream: stream || null }, { onConflict:"email" });
   return sqError("insert user role", error);
 }
 async function sbInsertWeeklyReports(reports) {
@@ -345,6 +358,13 @@ async function sbInsertWeeklyReports(reports) {
     diff_summary:r.diffSummary||{}, priority_risk_projects:r.priorityRiskProjects||[], ai_analysis:r.aiAnalysis||{}, snapshots:r.snapshots||[]
   })));
   return sqError("save weekly reports", error);
+}
+async function sbInsertActivityLog(projectId, page, changedBy, summary) {
+  if (!summary) return true; // nothing actually changed — don't log a no-op entry
+  const { error } = await supabaseClient.from("activity_log").insert({
+    id: uid(), project_id: projectId, page, changed_by: changedBy || null, summary
+  });
+  return sqError("insert activity log", error);
 }
 async function sbDeleteWeeklyReport(id) {
   const { error } = await supabaseClient.from("weekly_reports").delete().eq("id", id);
@@ -377,6 +397,127 @@ function nextProjectCode(stream, projectList) {
     }
   });
   return `${streamPrefix}-${String(maxSeq + 1).padStart(3, "0")}-${year}`;
+}
+
+/* =========================================================================
+   CHANGE HISTORY — builds human-readable "what changed" logs (one line per
+   individual field change, with before/after values) whenever Timeline /
+   PMO Documents / CM Documents are saved.
+   ========================================================================= */
+function truncateForLog(v, max = 60) {
+  const s = norm(v);
+  if (!s) return "(empty)";
+  return s.length > max ? s.slice(0, max) + "\u2026" : s;
+}
+/* Compares two arrays of rows by id against a set of {key,label} column
+   defs, returning which rows were added/removed, and for updated rows,
+   the exact before/after value of every field that changed. */
+function diffRowsById(oldRows, newRows, columnDefs) {
+  const oldById = new Map((oldRows || []).map(r => [r.id, r]));
+  const newById = new Map((newRows || []).map(r => [r.id, r]));
+  const added = (newRows || []).filter(r => !oldById.has(r.id));
+  const removed = (oldRows || []).filter(r => !newById.has(r.id));
+  const updated = (newRows || [])
+    .filter(r => oldById.has(r.id))
+    .map(r => {
+      const old = oldById.get(r.id);
+      const changed = columnDefs
+        .filter(c => String(old[c.key] || "") !== String(r[c.key] || ""))
+        .map(c => ({ key:c.key, label:c.label, before: old[c.key] || "", after: r[c.key] || "" }));
+      return { row:r, changed };
+    })
+    .filter(u => u.changed.length > 0);
+  return { added, removed, updated };
+}
+/* One line per change: added/removed rows get a single line each; updated
+   rows get one line PER changed field, showing "before --> after" (the
+   row's own identifying field is shown bare, other fields are prefixed
+   with the row's current name and the field label). */
+function summarizeRowsDiffLines(tableLabel, diff, labelKey) {
+  const lines = [];
+  diff.added.forEach(r => {
+    const name = labelKey ? (norm(r[labelKey]) || "Untitled") : "a row";
+    lines.push(`${tableLabel} - added "${name}"`);
+  });
+  diff.removed.forEach(r => {
+    const name = labelKey ? (norm(r[labelKey]) || "Untitled") : "a row";
+    lines.push(`${tableLabel} - removed "${name}"`);
+  });
+  diff.updated.forEach(u => {
+    const currentName = labelKey ? (norm(u.row[labelKey]) || "Untitled") : "";
+    u.changed.forEach(c => {
+      const beforeAfter = `${truncateForLog(c.before)} --> ${truncateForLog(c.after)}`;
+      lines.push(c.key === labelKey
+        ? `${tableLabel} - updated ${beforeAfter}`
+        : `${tableLabel} - updated "${currentName}" ${c.label}: ${beforeAfter}`
+      );
+    });
+  });
+  return lines;
+}
+
+const TASK_DIFF_COLUMNS = [
+  { key:"task", label:"Task" }, { key:"startDate", label:"Start Date" }, { key:"endDate", label:"End Date" },
+  { key:"pic", label:"PIC" }, { key:"status", label:"Status" }, { key:"phase", label:"Phase" }
+];
+const TODO_DIFF_COLUMNS = [
+  { key:"task", label:"Task" }, { key:"pic", label:"PIC" }, { key:"dueDate", label:"Due Date" },
+  { key:"status", label:"Status" }, { key:"blocker", label:"Blocker" }, { key:"flagged", label:"Flagged" }
+];
+function buildTimelineChangeSummary(oldTasks, newTasks, oldTodos, newTodos) {
+  const taskLines = summarizeRowsDiffLines("Project Timeline", diffRowsById(oldTasks, newTasks, TASK_DIFF_COLUMNS), "task");
+  const todoLines = summarizeRowsDiffLines("Tasks", diffRowsById(oldTodos, newTodos, TODO_DIFF_COLUMNS), "task");
+  return [...taskLines, ...todoLines].join("\n");
+}
+
+const PMO_LOG_TABLE_DEFS = [
+  ["changeRequestRows", "Change Request Log", [{key:"date",label:"Date"},{key:"description",label:"Description"},{key:"requester",label:"Requester"},{key:"status",label:"Status"},{key:"link",label:"Link"}], "description"],
+  ["stakeholderRows", "Stakeholder Register", [{key:"name",label:"Name"},{key:"email",label:"Email"},{key:"role",label:"Role"},{key:"interest",label:"Interest"},{key:"communication",label:"Communication"}], "name"],
+  ["benefitRows", "Benefit Register", [{key:"date",label:"Date"},{key:"description",label:"Description"},{key:"baselineMetrics",label:"Baseline Metrics"},{key:"targetMetrics",label:"Target Metrics"},{key:"beneficiaries",label:"Beneficiaries"},{key:"pic",label:"PIC"},{key:"status",label:"Status"}], "description"],
+  ["dependencyRows", "Dependency Log", [{key:"date",label:"Date"},{key:"description",label:"Description"},{key:"pic",label:"PIC"},{key:"status",label:"Status"}], "description"],
+  ["riskLogRows", "Risk Log", [{key:"date",label:"Date"},{key:"description",label:"Description"},{key:"impact",label:"Impact"},{key:"mitigation",label:"Mitigation"},{key:"pic",label:"PIC"},{key:"status",label:"Status"}], "description"],
+  ["lessonsLearnedRows", "Lesson Learned", [{key:"date",label:"Date"},{key:"issueSuccess",label:"Issue/Success"},{key:"result",label:"Result"},{key:"lessonLearned",label:"Lesson Learned"}], "issueSuccess"],
+  ["documentRows", "Documents", [{key:"docType",label:"Document Type"},{key:"description",label:"Description"},{key:"link",label:"Link"}], "description"],
+];
+function buildPmoChangeSummary(oldRecord, newFields) {
+  const lines = [];
+  if (newFields.charter !== undefined) {
+    Object.entries(CHARTER_FIELD_LABELS).forEach(([k, label]) => {
+      const before = (oldRecord.charter && oldRecord.charter[k]) || "";
+      const after = (newFields.charter && newFields.charter[k]) || "";
+      if (String(before) !== String(after)) {
+        lines.push(`Project Charter - updated ${label}: ${truncateForLog(before)} --> ${truncateForLog(after)}`);
+      }
+    });
+  }
+  PMO_LOG_TABLE_DEFS.forEach(([key, label, cols, labelKey]) => {
+    if (newFields[key] === undefined) return;
+    lines.push(...summarizeRowsDiffLines(label, diffRowsById(oldRecord[key], newFields[key], cols), labelKey));
+  });
+  return lines.join("\n");
+}
+
+function buildCmChangeSummary(oldNotes, newNotes) {
+  if (String(oldNotes || "") === String(newNotes || "")) return "";
+  return `CM Documents - updated notes: ${truncateForLog(oldNotes)} --> ${truncateForLog(newNotes)}`;
+}
+
+const PROJECT_FIELD_LABELS = {
+  application:"Application", deliveryModel:"Delivery Model", project:"Project", resource:"Resource",
+  mountain:"Mountain", stream:"Stream", subStream:"Sub Stream", startDate:"Start Date", endDate:"End Date",
+  tpo:"TPO", deliveryLead:"Delivery Lead", priority:"Priority", phase:"Phase",
+  goLivePlan:"Go Live Plan", goLiveActual:"Go Live Actual"
+};
+function buildProjectFieldsChangeSummary(oldRow, newFields) {
+  const lines = [];
+  Object.entries(PROJECT_FIELD_LABELS).forEach(([k, label]) => {
+    const before = (oldRow && oldRow[k]) || "";
+    const after = (newFields && newFields[k]) || "";
+    if (String(before) !== String(after)) {
+      lines.push(`Project Details - updated ${label}: ${truncateForLog(before)} --> ${truncateForLog(after)}`);
+    }
+  });
+  return lines.join("\n");
 }
 /* Turns a spreadsheet date value into an ISO "YYYY-MM-DD" string.
    Handles real Excel date cells (already a JS Date via cellDates:true),
@@ -692,10 +833,20 @@ function rowPassesFilters(row, filters, colKeys) {
 /* Ownership rule: a record can only be edited/deleted by whoever created it,
    or by a Super Admin. Records made before this feature existed (no
    createdBy stamped) have no owner, so only Super Admin can touch those. */
-function canModifyRecord(record, currentUser) {
+/* A user can edit a record if: they're Super Admin, they created it
+   themselves, or they're TPO/PMO with a Stream assigned in User Management
+   that matches the project's Stream. projectStream is optional — pass it
+   whenever the record itself doesn't carry its own .stream (tasks, PMO
+   log rows, etc. only know their project's stream via this parameter). */
+function canModifyRecord(record, currentUser, projectStream) {
   if (!currentUser) return false;
   if (currentUser.role === "superAdmin") return true;
-  return !!(record && record.createdBy && record.createdBy === currentUser.email);
+  if (record && record.createdBy && record.createdBy === currentUser.email) return true;
+  if ((currentUser.role === "tpo" || currentUser.role === "pmo") && currentUser.stream) {
+    const streamToCheck = projectStream !== undefined ? projectStream : (record && record.stream);
+    if (streamToCheck && norm(currentUser.stream).toLowerCase() === norm(streamToCheck).toLowerCase()) return true;
+  }
+  return false;
 }
 function OwnerLockNote({ record }) {
   const owner = record && record.createdBy;
@@ -1197,7 +1348,7 @@ function ColumnManager({ columnOrder, hiddenColumns, onToggleVisibility, onReord
   );
 }
 
-function TaskTable({ tasks, onUpdateTask, onRemoveTask, onReorderTask, columns, sortConfig, onSort, picListId, showGantt, currentUser, phaseOptions }) {
+function TaskTable({ tasks, onUpdateTask, onRemoveTask, onReorderTask, columns, sortConfig, onSort, picListId, showGantt, currentUser, phaseOptions, projectStream }) {
   const [filters, setFilters] = useState({});
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
@@ -1247,7 +1398,7 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, onReorderTask, columns, 
             ? h("div", { style:{ padding:"36px 0", textAlign:"center", color:"#94A3B8", fontSize:13, width: fixedW } }, "No tasks match the filter.")
             : filteredTasks.map((task, i) => {
               const rowBg = dragOverId === task.id ? "#EAF1F8" : (i % 2 === 0 ? "#fff" : "#FAFBFC");
-              const editable = canModifyRecord(task, currentUser);
+              const editable = canModifyRecord(task, currentUser, projectStream);
               const canDragRow = canDrag && editable;
               return h("div", {
                 key:task.id, style:{ display:"flex", position:"relative", zIndex:1, borderBottom:"1px solid #F1F5F9", background:rowBg, opacity: dragId === task.id ? 0.5 : 1 },
@@ -1341,7 +1492,7 @@ function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected
   );
 }
 
-function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picListId, currentUser }) {
+function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picListId, currentUser, projectStream }) {
   const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
   const [filters, setFilters] = useState({});
   const [dragId, setDragId] = useState(null);
@@ -1395,7 +1546,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
           : sorted.length === 0
             ? h("tr", null, h("td", { colSpan: visibleCols.length + 3, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No Tasks match the filter.'))
           : sorted.map((t, i) => {
-              const editable = canModifyRecord(t, currentUser);
+              const editable = canModifyRecord(t, currentUser, projectStream);
               const canDragRow = canDrag && editable;
               return h("tr", {
                 key:t.id,
@@ -1415,7 +1566,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
                   : null
               ),
               h("td", { style:{ ...tdStyle, textAlign:"center", width:36 } },
-                canModifyRecord(t, currentUser)
+                canModifyRecord(t, currentUser, projectStream)
                   ? h("button", {
                       onClick:()=>onUpdate(t.id,"flagged", !t.flagged),
                       title: t.flagged ? "Unflag this task" : "Flag this task for attention",
@@ -1424,7 +1575,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
                   : (t.flagged && h(Icon.flag, { filled:true, style:{ color:"#EA580C" } }))
               ),
               visibleCols.map(c => h("td", { key:c.key, style:tdStyle },
-                !canModifyRecord(t, currentUser) ? h("span", { style:{ fontSize:13, color:"#334155", whiteSpace:"normal", wordBreak:"break-word", overflowWrap:"break-word" } },
+                !canModifyRecord(t, currentUser, projectStream) ? h("span", { style:{ fontSize:13, color:"#334155", whiteSpace:"normal", wordBreak:"break-word", overflowWrap:"break-word" } },
                   c.key === "status" ? h(StaticBadge, { value:t.status, bgMap: STATUS_BG, fgMap: STATUS_FG }) :
                   c.key === "blocker" ? h(StaticBadge, { value:t.blocker, bgMap: TODO_BLOCKER_BG, fgMap: TODO_BLOCKER_FG }) :
                   (t[c.key] || "\u2014")
@@ -1440,7 +1591,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
                 null
               )),
               h("td", { style:{ ...tdStyle, textAlign:"center" } },
-                canModifyRecord(t, currentUser)
+                canModifyRecord(t, currentUser, projectStream)
                   ? h("button", { onClick:()=>onRemove(t.id), style:{ color:"#DC2626", background:"none", border:"none", fontSize:13, display:"flex" } }, h(Icon.trash,{}))
                   : h(OwnerLockNote, { record: t })
               )
@@ -1523,7 +1674,7 @@ function DetailView({
   todoHiddenColumns, onToggleTodoColumn,
   onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics, hideSelector, readOnly, ganttHidden, onToggleGantt, currentUser,
   onSaveProjectFields, phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions,
-  onDraftStateChange
+  onDraftStateChange, activityLogEntries
 }) {
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
@@ -1750,7 +1901,7 @@ function DetailView({
       sortedTasks.length === 0
         ? h("div", { style:{ fontSize:13, color:"#94A3B8", padding:"36px 0", textAlign:"center" } },
             canAddToProject ? 'No tasks yet. Click "Add Task" or import from an Excel file.' : "No tasks yet.")
-        : h(TaskTable, { tasks: sortedTasks, onUpdateTask: effUpdateTask, onRemoveTask: effRemoveTask, onReorderTask: effReorderTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser, phaseOptions })
+        : h(TaskTable, { tasks: sortedTasks, onUpdateTask: effUpdateTask, onRemoveTask: effRemoveTask, onReorderTask: effReorderTask, columns: visibleColumns, sortConfig, onSort, picListId, showGantt: !ganttHidden, currentUser, phaseOptions, projectStream: projectRow && projectRow.stream })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
@@ -1763,7 +1914,7 @@ function DetailView({
             h(Icon.plus,{}), "Add Task")
         )
       ),
-      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onRemove: effRemoveTodo, onReorder: effReorderTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser })
+      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onRemove: effRemoveTodo, onReorder: effReorderTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser, projectStream: projectRow && projectRow.stream })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
@@ -1892,6 +2043,12 @@ function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChan
       step < 3
         ? h("button", { className:"btn btn-primary", onClick: () => onStepChange(step + 1) }, "Next \u2192")
         : h("button", { className:"btn btn-primary", onClick:onExit }, "Done")
+    ),
+
+    h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"0 28px 48px" } },
+      h(ActivityLogPanel, {
+        entries: (step === 1 ? timelineProps.activityLogEntries : step === 2 ? pmoProps.activityLogEntries : cmProps.activityLogEntries) || []
+      })
     )
   );
 }
@@ -2007,7 +2164,7 @@ function DocumentPlaceholderView({ title }) {
 /* =========================================================================
    CHANGE MANAGEMENT
    ========================================================================= */
-function ChangeManagementView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, notes, onCommitNotes, hideSelector, readOnly, onDraftStateChange }) {
+function ChangeManagementView({ applicationText, projectText, onApplicationChange, onProjectChange, projectList, notes, onCommitNotes, hideSelector, readOnly, onDraftStateChange, activityLogEntries }) {
   const hasIdentity = norm(applicationText) && norm(projectText);
   const useDraft = !!hideSelector;
   const [draftNotes, setDraftNotes] = useState(() => notes || "");
@@ -2350,7 +2507,9 @@ function ResetPasswordControl({ email }) {
   );
 }
 
-function EmailListEditor({ emails, onAdd, onUpdate, onRemove }) {
+function EmailListEditor({ emails, onAdd, onUpdate, onRemove, showStream, streamOptions }) {
+  const getEmail = v => showStream ? ((v && v.email) || "") : (v || "");
+  const getStream = v => showStream ? ((v && v.stream) || "") : "";
   return h("div", null,
     h("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginBottom:14 } },
       (!emails || emails.length === 0)
@@ -2358,10 +2517,21 @@ function EmailListEditor({ emails, onAdd, onUpdate, onRemove }) {
         : emails.map((val, idx) => h("div", { key:idx, style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
             h("div", { style:{ width:24, fontSize:12, color:"#94A3B8", flexShrink:0, textAlign:"right" } }, idx + 1),
             h("input", {
-              type:"email", value: val, onChange: e => onUpdate(idx, e.target.value), placeholder:"name@company.com",
+              type:"email", value: getEmail(val),
+              onChange: e => onUpdate(idx, showStream ? { email:e.target.value, stream:getStream(val) } : e.target.value),
+              placeholder:"name@company.com",
               style:{ flex:1, minWidth:160, fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px", outline:"none" }
             }),
-            h(ResetPasswordControl, { email: val }),
+            showStream && h("select", {
+              value: getStream(val),
+              onChange: e => onUpdate(idx, { email:getEmail(val), stream:e.target.value }),
+              title:"Stream this user can edit projects for",
+              style:{ minWidth:150, fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px", outline:"none", background:"#fff" }
+            },
+              h("option", { value:"" }, "\u2014 Stream \u2014"),
+              (streamOptions || []).map(s => h("option", { key:s, value:s }, s))
+            ),
+            h(ResetPasswordControl, { email: getEmail(val) }),
             h("button", { onClick:() => onRemove(idx), style:{ color:"#DC2626", background:"none", border:"none", display:"flex", fontSize:14, cursor:"pointer", flexShrink:0 } }, h(Icon.trash,{}))
           ))
     ),
@@ -2369,7 +2539,8 @@ function EmailListEditor({ emails, onAdd, onUpdate, onRemove }) {
   );
 }
 
-function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, onRemove }) {
+function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, onRemove, streamOptions }) {
+  const showStream = role.key === "tpo" || role.key === "pmo";
   return h("div", { className:"card", style:{ marginTop:16 } },
     h("div", {
       onClick: () => onToggle(role.key),
@@ -2381,9 +2552,12 @@ function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, on
       ),
       h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
     ),
+    showStream && expanded && h("div", { style:{ fontSize:12, color:"#64748B", marginTop:10 } },
+      "Assign a Stream to each user \u2014 they'll be able to edit Timeline, PMO Documents, and CM Documents for any project in that Stream, in addition to projects they created themselves."
+    ),
     expanded && h("div", { style:{ marginTop:14 } },
       h(EmailListEditor, {
-        emails,
+        emails, showStream, streamOptions,
         onAdd: () => onAdd(role.key),
         onUpdate: (idx, val) => onUpdate(role.key, idx, val),
         onRemove: idx => onRemove(role.key, idx)
@@ -2392,14 +2566,16 @@ function UserRoleSection({ role, expanded, onToggle, emails, onAdd, onUpdate, on
   );
 }
 
-function CreateUserForm() {
+function CreateUserForm({ streamOptions }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("viewOnly");
+  const [stream, setStream] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [created, setCreated] = useState(null); // { email, password, role } of the last successfully created user
+  const [created, setCreated] = useState(null); // { email, password, role, stream } of the last successfully created user
   const [copied, setCopied] = useState("");
+  const showStream = role === "tpo" || role === "pmo";
 
   const extractErrorMessage = async (fnError) => {
     if (fnError && fnError.context && typeof fnError.context.json === "function") {
@@ -2413,7 +2589,7 @@ function CreateUserForm() {
     try {
       const cleanEmail = norm(email).toLowerCase();
       const { data, error: fnError } = await supabaseClient.functions.invoke("create-user", {
-        body: { email: cleanEmail, password, role }
+        body: { email: cleanEmail, password, role, stream: showStream ? stream : undefined }
       });
       if (fnError) setError(await extractErrorMessage(fnError));
       else if (data && data.error) setError(data.error);
@@ -2421,7 +2597,7 @@ function CreateUserForm() {
         // Deliberately NOT clearing email/password here — the admin needs
         // to see and copy this password now, since it can never be shown
         // again once they navigate away (Supabase only stores a hash).
-        setCreated({ email: cleanEmail, password, role });
+        setCreated({ email: cleanEmail, password, role, stream: showStream ? stream : "" });
       }
     } catch (e) {
       setError(e.message || "Unexpected error.");
@@ -2433,7 +2609,7 @@ function CreateUserForm() {
     navigator.clipboard.writeText(text).then(() => { setCopied(label); setTimeout(() => setCopied(""), 1500); });
   };
 
-  const startAnother = () => { setCreated(null); setEmail(""); setPassword(""); setRole("viewOnly"); };
+  const startAnother = () => { setCreated(null); setEmail(""); setPassword(""); setRole("viewOnly"); setStream(""); };
 
   return h("div", { className:"card", style:{ padding:20, marginBottom:20 } },
     h("div", { style:{ fontSize:14, fontWeight:700, color:"#152238", marginBottom:4 } }, "Add New User"),
@@ -2451,7 +2627,7 @@ function CreateUserForm() {
               h("div", { style:{ flex:1, fontSize:13, fontFamily:"monospace", background:"#fff", border:"1px solid #E2E8F0", borderRadius:7, padding:"7px 10px" } }, created.password),
               h("button", { className:"btn", onClick:() => copyToClipboard(created.password, "password") }, copied === "password" ? "Copied!" : "Copy")
             ),
-            h("div", { style:{ fontSize:12, color:"#64748B" } }, `Role: ${(USER_ROLES.find(r => r.key === created.role) || {}).label || created.role}`)
+            h("div", { style:{ fontSize:12, color:"#64748B" } }, `Role: ${(USER_ROLES.find(r => r.key === created.role) || {}).label || created.role}${created.stream ? ` \u00B7 Stream: ${created.stream}` : ""}`)
           ),
           h("button", { className:"btn btn-primary", onClick:startAnother, style:{ marginTop:14 } }, "Add Another User")
         )
@@ -2480,6 +2656,16 @@ function CreateUserForm() {
                 USER_ROLES.map(r => h("option", { key:r.key, value:r.key }, r.label))
               )
             ),
+            showStream && h("div", { style:{ flex:"0 1 150px" } },
+              h("label", { style:{ fontSize:11, color:"#64748B", fontWeight:600, display:"block", marginBottom:4 } }, "Stream"),
+              h("select", {
+                value:stream, onChange:e => setStream(e.target.value),
+                style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px", outline:"none", background:"#fff" }
+              },
+                h("option", { value:"" }, "\u2014 Stream \u2014"),
+                (streamOptions || []).map(s => h("option", { key:s, value:s }, s))
+              )
+            ),
             h("button", {
               className:"btn btn-primary", onClick:handleCreate, disabled: submitting || !email || !password
             }, submitting ? "Creating\u2026" : "Create User")
@@ -2489,14 +2675,18 @@ function CreateUserForm() {
   );
 }
 
-function UserManagementView({ userManagement, onSaveAll, readOnly }) {
+function UserManagementView({ userManagement, onSaveAll, readOnly, streamOptions }) {
   const [expandedSections, setExpandedSections] = useState({});
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
   const [draft, setDraft] = useState(userManagement);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { if (!dirty) setDraft(userManagement); }, [userManagement]);
 
-  const onAddEmail = roleKey => { setDraft(d => ({ ...d, [roleKey]: [...((d && d[roleKey]) || []), ""] })); setDirty(true); };
+  const onAddEmail = roleKey => {
+    const isStreamRole = roleKey === "tpo" || roleKey === "pmo";
+    setDraft(d => ({ ...d, [roleKey]: [...((d && d[roleKey]) || []), isStreamRole ? { email:"", stream:"" } : ""] }));
+    setDirty(true);
+  };
   const onUpdateEmail = (roleKey, idx, value) => {
     setDraft(d => ({ ...d, [roleKey]: ((d && d[roleKey]) || []).map((v,i) => i===idx ? value : v) }));
     setDirty(true);
@@ -2519,12 +2709,12 @@ function UserManagementView({ userManagement, onSaveAll, readOnly }) {
       )
     ),
     readOnly && h(ReadOnlyBanner),
-    !readOnly && h(CreateUserForm),
+    !readOnly && h(CreateUserForm, { streamOptions }),
     h("div", { style: readOnly ? { pointerEvents:"none", opacity:0.7 } : {} },
       USER_ROLES.map(role => h(UserRoleSection, {
         key: role.key, role, expanded: !!expandedSections[role.key], onToggle: toggleSection,
         emails: (draft && draft[role.key]) || [],
-        onAdd: onAddEmail, onUpdate: onUpdateEmail, onRemove: onRemoveEmail
+        onAdd: onAddEmail, onUpdate: onUpdateEmail, onRemove: onRemoveEmail, streamOptions
       }))
     )
   );
@@ -2610,6 +2800,8 @@ const CHARTER_FIELDS = {
   risk: { label:"High Level Risk & Mitigation*", hint:"Describe any key risks to the project, along with corresponding impact and mitigation plans to prevent those risks from being realized." },
   stakeholders: { label:"Key Stakeholders", hint:"Stakeholders who have the influence and authority to dictate whether a project is considered a success or not." },
 };
+const CHARTER_FIELD_LABELS = { projectTitle:"Project Title", tpo:"TPO",
+  ...Object.fromEntries(Object.entries(CHARTER_FIELDS).map(([k, v]) => [k, v.label])) };
 /* Shared Timeline progress calculation — Done items over all items that
    aren't Cancelled, across both the task table and the to-do table. Used
    on the Timeline page itself and to auto-derive the "Timeline" item on
@@ -2722,6 +2914,28 @@ function ReadOnlyBanner() {
   },
     h(Icon.file, { style:{ flexShrink:0 } }),
     h("span", null, "View-only mode. To edit this data, open the project via the ", h("strong",null,"Project List"), ".")
+  );
+}
+
+/* History Log — shown under the Save button on Timeline, PMO Documents,
+   and CM Documents. Every commit on that page for this project appends an
+   entry recording who changed what, newest first. */
+function ActivityLogPanel({ entries }) {
+  const fmt = d => new Date(d).toLocaleString("en-US", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  return h("div", { className:"card", style:{ marginTop:20, padding:20 } },
+    h("div", { style:{ fontSize:14, fontWeight:700, color:"#152238", marginBottom: entries.length ? 12 : 4 } }, "History Log"),
+    entries.length === 0
+      ? h("div", { style:{ fontSize:13, color:"#94A3B8" } }, "No changes recorded yet \u2014 entries appear here after you Save.")
+      : h("div", { style:{ display:"flex", flexDirection:"column", gap:12, maxHeight:340, overflow:"auto" } },
+          entries.map(e => h("div", { key:e.id, style:{ borderLeft:"3px solid #4F9D9D", paddingLeft:11 } },
+            h("div", { style:{ fontSize:12, color:"#94A3B8", marginBottom:2 } },
+              fmt(e.changedAt), e.changedBy ? ` \u00B7 ${e.changedBy}` : ""
+            ),
+            h("div", { style:{ display:"flex", flexDirection:"column", gap:2 } },
+              (e.summary || "").split("\n").filter(Boolean).map((line, i) => h("div", { key:i, style:{ fontSize:13, color:"#334155" } }, line))
+            )
+          ))
+        )
   );
 }
 
@@ -2879,7 +3093,7 @@ function ProjectDetailsCard({ form, onFieldChange, editable, phaseOptions, mount
 
 const DOCUMENT_TYPE_OPTS = ["PRD", "Security Assessment", "Hypercare Issue Log", "Others"];
 
-function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser, canAdd }) {
+function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser, canAdd, projectStream }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
   return h("div", null,
     h("div", { style:{ overflowX:"auto", border:"1px solid #E2E8F0", borderRadius:12, marginTop:8, marginBottom:16 } },
@@ -2895,7 +3109,7 @@ function DocumentsSection({ rows, onAdd, onUpdate, onRemove, currentUser, canAdd
           (!rows || rows.length === 0)
             ? h("tr", null, h("td", { colSpan:5, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No documents yet. Click "Add" to add a row.'))
             : rows.map((row, i) => {
-              const editable = canModifyRecord(row, currentUser);
+              const editable = canModifyRecord(row, currentUser, projectStream);
               return h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, i + 1),
                 h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
@@ -2979,7 +3193,7 @@ const LESSON_LEARNED_COLUMNS = [
   { key:"lessonLearned", label:"Lesson Learned", type:"text" },
 ];
 
-function EditableLogTable({ columns, rows, onAdd, onUpdate, onRemove, currentUser, canAdd, addLabel, lockedNote, showRowNumber = true }) {
+function EditableLogTable({ columns, rows, onAdd, onUpdate, onRemove, currentUser, canAdd, addLabel, lockedNote, showRowNumber = true, projectStream }) {
   const inputStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
   const colSpanCount = columns.length + (showRowNumber ? 2 : 1);
   const hasCustomWidths = columns.some(c => c.widthFactor && c.widthFactor !== 1);
@@ -3002,7 +3216,7 @@ function EditableLogTable({ columns, rows, onAdd, onUpdate, onRemove, currentUse
           (!rows || rows.length === 0)
             ? h("tr", null, h("td", { colSpan: colSpanCount, style:{ padding:"28px 8px", textAlign:"center", color:"#94A3B8", fontSize:13 } }, 'No entries yet. Click "Add" to add a row.'))
             : rows.map((row, i) => {
-              const editable = canModifyRecord(row, currentUser);
+              const editable = canModifyRecord(row, currentUser, projectStream);
               return h("tr", { key:row.id, style:{ background: i % 2 === 0 ? "#fff" : "#FAFBFC" } },
                 showRowNumber && h("td", { style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9", color:"#64748B" } }, i + 1),
                 columns.map(c => h("td", { key:c.key, style:{ padding:"7px 10px", borderBottom:"1px solid #F1F5F9" } },
@@ -3068,7 +3282,7 @@ function ProjectBaselineView({
   applicationText, projectText, onApplicationChange, onProjectChange, projectList,
   charter, readiness, documentRows, changeRequestRows, stakeholderRows, benefitRows, dependencyRows, riskLogRows, lessonsLearnedRows,
   timelineTasks, timelineTodos,
-  onCommitBaseline, hideSelector, readOnly, currentUser, onDraftStateChange
+  onCommitBaseline, hideSelector, readOnly, currentUser, onDraftStateChange, activityLogEntries
 }) {
   const [expandedSections, setExpandedSections] = useState({ readiness:false, charter:false, benefit:false, stakeholder:false, risk:false, upload:false });
   const toggleSection = key => setExpandedSections(s => ({ ...s, [key]: !s[key] }));
@@ -3216,7 +3430,8 @@ function ProjectBaselineView({
             h(expanded ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } })
           ),
           expanded && h(DocumentsSection, {
-            rows: effDocumentRows, onAdd: effAddDocumentRow, onUpdate: effUpdateDocumentRow, onRemove: effRemoveDocumentRow, currentUser, canAdd: canAddToProject
+            rows: effDocumentRows, onAdd: effAddDocumentRow, onUpdate: effUpdateDocumentRow, onRemove: effRemoveDocumentRow, currentUser, canAdd: canAddToProject,
+            projectStream: projectRow && projectRow.stream
           })
         );
       }
@@ -3240,7 +3455,8 @@ function ProjectBaselineView({
           ),
           expanded && h(EditableLogTable, {
             columns: table.columns, rows: table.rows, onAdd: table.onAdd, onUpdate: table.onUpdate, onRemove: table.onRemove,
-            currentUser, canAdd: canAddToProject, showRowNumber: table.showRowNumber !== false
+            currentUser, canAdd: canAddToProject, showRowNumber: table.showRowNumber !== false,
+            projectStream: projectRow && projectRow.stream
           })
         );
       }
@@ -3831,6 +4047,7 @@ function AppRoot() {
   const [masterData, setMasterData] = useState({ ...DEFAULT_MASTER_DATA, ...(stored.masterData || {}) });
   const [userManagement, setUserManagement] = useState(stored.userManagement || DEFAULT_USER_MANAGEMENT);
   const [weeklyReports, setWeeklyReports] = useState(stored.weeklyReports || []);
+  const [activityLog, setActivityLog] = useState(stored.activityLog || []);
   const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient); // checking for an existing session
   const [dataLoading, setDataLoading] = useState(false); // fetching app data, only once logged in
   const remoteHydrated = useRef(false);
@@ -3863,9 +4080,9 @@ function AppRoot() {
 
   const lookupRoleForEmail = async email => {
     if (!supabaseClient) return null;
-    const { data, error } = await supabaseClient.from("user_roles").select("role").ilike("email", email).maybeSingle();
+    const { data, error } = await supabaseClient.from("user_roles").select("role, stream").ilike("email", email).maybeSingle();
     if (error || !data) return null;
-    return data.role;
+    return { role: data.role, stream: data.stream || "" };
   };
 
   // Real auth session check — must happen BEFORE we try to load any app
@@ -3879,8 +4096,8 @@ function AppRoot() {
       if (cancelled) return;
       const session = data && data.session;
       if (session && session.user && session.user.email) {
-        const role = await lookupRoleForEmail(session.user.email);
-        if (!cancelled && role) setCurrentUser({ email: session.user.email, role });
+        const roleInfo = await lookupRoleForEmail(session.user.email);
+        if (!cancelled && roleInfo) setCurrentUser({ email: session.user.email, role: roleInfo.role, stream: roleInfo.stream || "" });
       }
       if (!cancelled) setRemoteLoading(false);
     });
@@ -3906,6 +4123,7 @@ function AppRoot() {
       setMasterData({ ...DEFAULT_MASTER_DATA, ...remote.masterData });
       setUserManagement(remote.userManagement);
       setWeeklyReports(remote.weeklyReports);
+      setActivityLog(remote.activityLog);
     };
     fetchAllFromSupabase().then(remote => {
       if (cancelled) return;
@@ -3958,6 +4176,14 @@ function AppRoot() {
     });
   };
   const onCommitBaseline = fields => {
+    if (currentUser) {
+      const summary = buildPmoChangeSummary(baselineRecord, fields);
+      if (summary && baselineProjectId) {
+        const entry = { id: uid(), projectId: baselineProjectId, page:"pmo", changedBy: currentUser.email, changedAt: new Date().toISOString(), summary };
+        setActivityLog(log => [entry, ...log]);
+        if (supabaseClient) sbInsertActivityLog(baselineProjectId, "pmo", currentUser.email, summary);
+      }
+    }
     updateBaselineRecord(cur => ({ ...cur, ...fields }));
     if (supabaseClient && baselineProjectId) sbCommitBaseline(baselineProjectId, fields);
   };
@@ -3972,6 +4198,14 @@ function AppRoot() {
     return row ? row.id : null;
   }, [projectList, cmApplicationText, cmProjectText]);
   const onCommitNotes = value => {
+    if (currentUser) {
+      const summary = buildCmChangeSummary(changeManagementRecord.notes, value);
+      if (summary && cmProjectId) {
+        const entry = { id: uid(), projectId: cmProjectId, page:"cm", changedBy: currentUser.email, changedAt: new Date().toISOString(), summary };
+        setActivityLog(log => [entry, ...log]);
+        if (supabaseClient) sbInsertActivityLog(cmProjectId, "cm", currentUser.email, summary);
+      }
+    }
     setChangeManagementRecords(prev => ({
       ...prev, [cmKey]: { ...(prev[cmKey] || {}), notes: value, application: cmApplicationText, project: cmProjectText }
     }));
@@ -4044,19 +4278,19 @@ function AppRoot() {
     const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
     if (error) return { ok:false, message:"Incorrect email or password, or the account isn't confirmed yet." };
 
-    let role = await lookupRoleForEmail(email);
-    if (!role) {
+    let roleInfo = await lookupRoleForEmail(email);
+    if (!roleInfo) {
       const { count } = await supabaseClient.from("user_roles").select("*", { count:"exact", head:true });
       if ((count || 0) === 0) {
         // Bootstrap: first confirmed account becomes Super Admin.
-        role = "superAdmin";
+        roleInfo = { role:"superAdmin", stream:"" };
         await sbInsertUserRole(email, "superAdmin");
       } else {
         await supabaseClient.auth.signOut();
         return { ok:false, message:"Your account exists but isn't assigned a role. Contact Super Admin." };
       }
     }
-    setCurrentUser({ email, role });
+    setCurrentUser({ email, role: roleInfo.role, stream: roleInfo.stream || "" });
     return { ok:true };
   };
   const onLogout = () => {
@@ -4082,7 +4316,7 @@ function AppRoot() {
       // moment it happens, instead of one giant "save everything" blob push.
       const ok = saveState({
         activeView, projectList, records, baselineRecords, masterData, userManagement, changeManagementRecords, sidebarCollapsed,
-        weeklyReports,
+        weeklyReports, activityLog,
         lastApplication: applicationText, lastProject: projectText,
         lastBaselineApplication: baselineApplicationText, lastBaselineProject: baselineProjectText,
         lastCmApplication: cmApplicationText, lastCmProject: cmProjectText,
@@ -4146,6 +4380,15 @@ function AppRoot() {
       alert("Application and Project are required.");
       return;
     }
+    const oldRow = projectList.find(r => r.id === projectId);
+    if (currentUser && oldRow) {
+      const summary = buildProjectFieldsChangeSummary(oldRow, fields);
+      if (summary) {
+        const entry = { id: uid(), projectId, page:"timeline", changedBy: currentUser.email, changedAt: new Date().toISOString(), summary };
+        setActivityLog(log => [entry, ...log]);
+        if (supabaseClient) sbInsertActivityLog(projectId, "timeline", currentUser.email, summary);
+      }
+    }
     setProjectList(list => {
       const next = list.map(r => r.id === projectId ? { ...r, ...fields } : r);
       if (supabaseClient) { const row = next.find(r => r.id === projectId); if (row) sbUpsertProject(row); }
@@ -4186,6 +4429,14 @@ function AppRoot() {
   const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
 
   const onCommitRecord = (tasks, todos) => {
+    if (currentUser) {
+      const summary = buildTimelineChangeSummary(record.tasks, tasks, record.todos, todos);
+      if (summary && currentProjectId) {
+        const entry = { id: uid(), projectId: currentProjectId, page:"timeline", changedBy: currentUser.email, changedAt: new Date().toISOString(), summary };
+        setActivityLog(log => [entry, ...log]);
+        if (supabaseClient) sbInsertActivityLog(currentProjectId, "timeline", currentUser.email, summary);
+      }
+    }
     updateRecord(cur => ({ ...cur, tasks, todos }));
     if (supabaseClient && currentProjectId) sbReplaceTasksTodos(currentProjectId, tasks, todos);
   };
@@ -4243,6 +4494,7 @@ function AppRoot() {
     return [...set].sort();
   }, [records, projectList]);
 
+  const timelineActivityLog = useMemo(() => activityLog.filter(e => e.projectId === currentProjectId && e.page === "timeline"), [activityLog, currentProjectId]);
   const detailViewProps = {
     applicationText, projectText, onApplicationChange: setApplicationText, onProjectChange: setProjectText, projectList,
     record, onCommitRecord,
@@ -4252,10 +4504,12 @@ function AppRoot() {
     onSubmitUpdate, onDeleteUpdate, saveStatus, picListId, pics,
     ganttHidden: taskGanttHidden, onToggleGantt: onToggleTaskGantt, currentUser,
     onSaveProjectFields, phaseOptions: masterData.phase, mountainOptions: masterData.mountain, streamOptions: masterData.stream,
-    subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel
+    subStreamOptions: masterData.subStream, applicationOptions: masterData.applications, deliveryModelOptions: masterData.deliveryModel,
+    activityLogEntries: timelineActivityLog
   };
   const baselineTimelineKey = useMemo(() => makeKey(baselineApplicationText, baselineProjectText), [baselineApplicationText, baselineProjectText]);
   const baselineTimelineRecord = records[baselineTimelineKey] || { tasks:[], todos:[] };
+  const pmoActivityLog = useMemo(() => activityLog.filter(e => e.projectId === baselineProjectId && e.page === "pmo"), [activityLog, baselineProjectId]);
   const projectBaselineViewProps = {
     applicationText: baselineApplicationText, projectText: baselineProjectText,
     onApplicationChange: setBaselineApplicationText, onProjectChange: setBaselineProjectText,
@@ -4265,12 +4519,13 @@ function AppRoot() {
     benefitRows: baselineRecord.benefitRows, dependencyRows: baselineRecord.dependencyRows,
     riskLogRows: baselineRecord.riskLogRows, lessonsLearnedRows: baselineRecord.lessonsLearnedRows,
     timelineTasks: baselineTimelineRecord.tasks, timelineTodos: baselineTimelineRecord.todos,
-    onCommitBaseline, currentUser
+    onCommitBaseline, currentUser, activityLogEntries: pmoActivityLog
   };
+  const cmActivityLog = useMemo(() => activityLog.filter(e => e.projectId === cmProjectId && e.page === "cm"), [activityLog, cmProjectId]);
   const changeManagementViewProps = {
     applicationText: cmApplicationText, projectText: cmProjectText,
     onApplicationChange: setCmApplicationText, onProjectChange: setCmProjectText,
-    projectList, notes: changeManagementRecord.notes, onCommitNotes
+    projectList, notes: changeManagementRecord.notes, onCommitNotes, activityLogEntries: cmActivityLog
   };
 
   if (remoteLoading) {
@@ -4346,7 +4601,8 @@ function AppRoot() {
         : activeView === "user-management"
         ? h(UserManagementView, {
             userManagement, onSaveAll: onSaveUserManagement,
-            readOnly: !currentUser || currentUser.role !== "superAdmin"
+            readOnly: !currentUser || currentUser.role !== "superAdmin",
+            streamOptions: masterData.stream
           })
         : activeView === "trash"
         ? h(TrashView, { currentUser })
