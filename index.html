@@ -1096,7 +1096,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
    ========================================================================= */
 const COLS = [
   { key:"no", label:"No", width:44 },
-  { key:"task", label:"Task", width:210 },
+  { key:"task", label:"Task", width:420 },
   { key:"startDate", label:"Start Date", width:124 },
   { key:"endDate", label:"End Date", width:124 },
   { key:"pic", label:"PIC", width:130 },
@@ -1128,7 +1128,7 @@ function cellEditor(colKey, task, onUpdate, picListId, phaseOptions) {
 
 /* Read-only rendering for a task row the current user isn't allowed to edit. */
 function cellDisplayReadOnly(colKey, task, phaseOptions) {
-  const textStyle = { fontSize:13, color:"#334155" };
+  const textStyle = { fontSize:13, color:"#334155", whiteSpace:"normal", wordBreak:"break-word", overflowWrap:"break-word" };
   switch (colKey) {
     case "task": return h("span", { style:textStyle }, task.task || "\u2014");
     case "startDate": return h("span", { style:{ ...textStyle, fontSize:12 } }, task.startDate || "\u2014");
@@ -1267,7 +1267,7 @@ function TaskTable({ tasks, onUpdateTask, onRemoveTask, onReorderTask, columns, 
                       : h("span", { style:{ width:14, flexShrink:0 } }),
                     task.no
                   ),
-                  columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px", display:"flex", alignItems:"center", minHeight:34 } },
+                  columns.map(c => h("div", { key:c.key, style:{ width:c.width, padding:"6px 8px", display:"flex", alignItems: editable ? "center" : "flex-start", minHeight:34 } },
                     editable ? cellEditor(c.key, task, (field, val) => onUpdateTask(task.id, field, val), picListId, phaseOptions) : cellDisplayReadOnly(c.key, task, phaseOptions)
                   )),
                   h("div", { style:{ width:40, display:"flex", alignItems:"center", justifyContent:"center" } },
@@ -1327,7 +1327,7 @@ function TodoColumnManager({ hiddenColumns, onToggleVisibility }) {
 function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected, onFilterChange }) {
   const active = sortConfig.key === col.key;
   return h("th", {
-    style: { padding:"10px 10px", textAlign:"left", color:"#fff", fontWeight:600, fontSize:12 }
+    style: { padding:"10px 10px", textAlign:"left", color:"#fff", fontWeight:600, fontSize:12, width: col.key === "task" ? 360 : undefined }
   },
     h("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
       h("span", { onClick: () => onSort(col.key), title:"Click to sort", style:{ cursor:"pointer", flex:1 } }, col.label),
@@ -1348,7 +1348,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
   const [dragOverId, setDragOverId] = useState(null);
   const visibleCols = TODO_COLS.filter(c => c.key === "task" || !hiddenColumns.includes(c.key));
   const colKeys = useMemo(() => visibleCols.map(c => c.key), [visibleCols]);
-  const tdStyle = { padding:"7px 10px", borderBottom:"1px solid #F1F5F9" };
+  const tdStyle = { padding:"7px 10px", borderBottom:"1px solid #F1F5F9", verticalAlign:"top" };
   const canDrag = !sortConfig.key;
 
   const onSort = k => setSortConfig(c => c.key !== k ? { key:k, dir:"asc" } : (c.dir === "asc" ? { key:k, dir:"desc" } : { key:null, dir:"asc" }));
@@ -1424,7 +1424,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
                   : (t.flagged && h(Icon.flag, { filled:true, style:{ color:"#EA580C" } }))
               ),
               visibleCols.map(c => h("td", { key:c.key, style:tdStyle },
-                !canModifyRecord(t, currentUser) ? h("span", { style:{ fontSize:13, color:"#334155" } },
+                !canModifyRecord(t, currentUser) ? h("span", { style:{ fontSize:13, color:"#334155", whiteSpace:"normal", wordBreak:"break-word", overflowWrap:"break-word" } },
                   c.key === "status" ? h(StaticBadge, { value:t.status, bgMap: STATUS_BG, fgMap: STATUS_FG }) :
                   c.key === "blocker" ? h(StaticBadge, { value:t.blocker, bgMap: TODO_BLOCKER_BG, fgMap: TODO_BLOCKER_FG }) :
                   (t[c.key] || "\u2014")
