@@ -323,30 +323,61 @@ async function sbCommitCmNotes(projectId, notes) {
   return sqError("save CM notes", error);
 }
 async function sbSaveMasterData(masterData) {
-  const { error: delErr } = await supabaseClient.from("master_data_items").delete().neq("id", -1);
-  if (sqError("clear master data", delErr) === false) return false;
-  const rows = [];
+  // Diff against what's actually in the database right now (never trust
+  // that the local/cached draft is complete) — only touch rows that are
+  // genuinely new, changed, or removed, instead of wiping everything and
+  // re-inserting whatever the client happens to have in memory.
+  const { data: existingRows, error: fetchErr } = await supabaseClient.from("master_data_items").select("id, category, value");
+  if (sqError("read current master data", fetchErr) === false) return false;
+
+  const draftPairs = new Set();
+  const upsertRows = [];
   Object.entries(MASTER_DATA_CATEGORY_MAP).forEach(([jsKey, category]) => {
-    (masterData[jsKey] || []).forEach((value, i) => { if (norm(value)) rows.push({ category, value, sort_order:i }); });
+    (masterData[jsKey] || []).forEach((value, i) => {
+      if (!norm(value)) return;
+      draftPairs.add(`${category}::${norm(value).toLowerCase()}`);
+      upsertRows.push({ category, value: norm(value), sort_order:i });
+    });
   });
-  if (!rows.length) return true;
-  const { error } = await supabaseClient.from("master_data_items").insert(rows);
-  return sqError("save master data", error);
+
+  const toDeleteIds = (existingRows || [])
+    .filter(r => !draftPairs.has(`${r.category}::${norm(r.value).toLowerCase()}`))
+    .map(r => r.id);
+  if (toDeleteIds.length > 0) {
+    const { error: delErr } = await supabaseClient.from("master_data_items").delete().in("id", toDeleteIds);
+    if (sqError("remove master data", delErr) === false) return false;
+  }
+  if (upsertRows.length > 0) {
+    const { error } = await supabaseClient.from("master_data_items").upsert(upsertRows, { onConflict:"category,value" });
+    if (sqError("save master data", error) === false) return false;
+  }
+  return true;
 }
 async function sbSaveUserManagement(userManagement) {
-  const { error: delErr } = await supabaseClient.from("user_roles").delete().neq("email", "");
-  if (sqError("clear user roles", delErr) === false) return false;
-  const rows = [];
+  // Same diff-based approach as sbSaveMasterData, for the same reason.
+  const { data: existingRows, error: fetchErr } = await supabaseClient.from("user_roles").select("email, role, stream");
+  if (sqError("read current user roles", fetchErr) === false) return false;
+
+  const draftRows = [];
   Object.keys(userManagement).forEach(role => {
     (userManagement[role] || []).forEach(item => {
       const email = typeof item === "string" ? item : (item && item.email) || "";
       const stream = typeof item === "string" ? null : ((item && item.stream) || null);
-      if (norm(email)) rows.push({ email: norm(email).toLowerCase(), role, stream });
+      if (norm(email)) draftRows.push({ email: norm(email).toLowerCase(), role, stream });
     });
   });
-  if (!rows.length) return true;
-  const { error } = await supabaseClient.from("user_roles").insert(rows);
-  return sqError("save user roles", error);
+
+  const draftEmails = new Set(draftRows.map(r => r.email));
+  const toDelete = (existingRows || []).filter(r => !draftEmails.has(r.email.toLowerCase())).map(r => r.email);
+  if (toDelete.length > 0) {
+    const { error: delErr } = await supabaseClient.from("user_roles").delete().in("email", toDelete);
+    if (sqError("remove user roles", delErr) === false) return false;
+  }
+  if (draftRows.length > 0) {
+    const { error } = await supabaseClient.from("user_roles").upsert(draftRows, { onConflict:"email" });
+    if (sqError("save user roles", error) === false) return false;
+  }
+  return true;
 }
 async function sbInsertUserRole(email, role, stream) {
   const { error } = await supabaseClient.from("user_roles").upsert({ email: norm(email).toLowerCase(), role, stream: stream || null }, { onConflict:"email" });
@@ -2295,7 +2326,19 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
     setDraft(d => ({ ...d, [catKey]: ((d && d[catKey]) || []).filter((_,i) => i!==idx) }));
     setDirty(true);
   };
-  const handleSave = () => { onSaveAll(draft); setDirty(false); };
+  const handleSave = () => {
+    const countAll = data => MASTER_DATA_CATEGORIES.reduce((sum, c) => sum + ((data && data[c.key]) || []).length, 0);
+    const currentTotal = countAll(masterData), draftTotal = countAll(draft);
+    if (currentTotal >= 5 && draftTotal < currentTotal * 0.5) {
+      const ok = window.confirm(
+        `This would remove ${currentTotal - draftTotal} of ${currentTotal} existing Master Data value(s) (going from ${currentTotal} to ${draftTotal}).\n\n` +
+        `This usually means something didn't load correctly rather than an intentional bulk removal. Continue anyway?`
+      );
+      if (!ok) return;
+    }
+    onSaveAll(draft);
+    setDirty(false);
+  };
 
   const handleImportFile = e => {
     if (readOnly) { e.target.value = ""; return; }
@@ -2695,7 +2738,19 @@ function UserManagementView({ userManagement, onSaveAll, readOnly, streamOptions
     setDraft(d => ({ ...d, [roleKey]: ((d && d[roleKey]) || []).filter((_,i) => i!==idx) }));
     setDirty(true);
   };
-  const handleSave = () => { onSaveAll(draft); setDirty(false); };
+  const handleSave = () => {
+    const countAll = data => USER_ROLES.reduce((sum, r) => sum + ((data && data[r.key]) || []).length, 0);
+    const currentTotal = countAll(userManagement), draftTotal = countAll(draft);
+    if (currentTotal >= 5 && draftTotal < currentTotal * 0.5) {
+      const ok = window.confirm(
+        `This would remove ${currentTotal - draftTotal} of ${currentTotal} existing user(s) (going from ${currentTotal} to ${draftTotal}).\n\n` +
+        `This usually means something didn't load correctly rather than an intentional bulk removal. Continue anyway?`
+      );
+      if (!ok) return;
+    }
+    onSaveAll(draft);
+    setDirty(false);
+  };
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:20 } },
