@@ -2004,12 +2004,9 @@ function DetailView({
    SIDEBAR + ROOT APP
    ========================================================================= */
 const NAV_ITEMS = [
+  { key:"dashboard-report", label:"Dashboard Report", icon:Icon.chart },
   { key:"create-project", label:"Create Project", icon:Icon.plus },
   { key:"list", label:"Project List", icon:Icon.grid },
-  { key:"report", label:"Report", icon:Icon.chart, children:[
-    { key:"dashboard-report", label:"Dashboard Report" },
-    { key:"weekly-report", label:"Weekly Report" },
-  ] },
   { key:"document", label:"View Documents", icon:Icon.file, children:[
     { key:"detail", label:"Timeline" },
     { key:"doc-baseline", label:"PMO Documents" },
@@ -2184,9 +2181,9 @@ function ProjectWizardView({ step, onStepChange, onExit, dirty, onDraftStateChan
 function Sidebar({ active, onNavigate, collapsed, onToggleCollapse, currentUser, onLogout, remoteSaveFailed }) {
   const visibleNavItems = (currentUser && currentUser.role === "superAdmin")
     ? NAV_ITEMS
-    : NAV_ITEMS.filter(it => it.key === "report" || it.key === "create-project" || it.key === "list");
+    : NAV_ITEMS.filter(it => it.key === "dashboard-report" || it.key === "create-project" || it.key === "list");
   const activeGroup = visibleNavItems.find(it => it.children && it.children.some(c => c.key === active));
-  const [expandedGroups, setExpandedGroups] = useState({ report: true, document: true });
+  const [expandedGroups, setExpandedGroups] = useState({ document: true });
   const toggleGroup = key => setExpandedGroups(g => ({ ...g, [key]: !g[key] }));
   const onGroupHeaderClick = key => {
     if (collapsed) { onToggleCollapse(); return; }
@@ -5314,8 +5311,6 @@ function AppRoot() {
     h("div", { style:{ flex:1, minWidth:0 } },
       activeView === "dashboard-report"
         ? h(DashboardReportView, { projectList: sortedProjectList, records })
-        : activeView === "weekly-report"
-        ? h(WeeklyReportView, { weeklyReports, currentUser, onDeleteWeeklyReport, projectList: sortedProjectList, records, onSaveWeeklyReports, streamMasterOptions: masterData.stream })
         : activeView === "create-project"
         ? h(CreateProjectView, {
             form: createProjectForm, onFieldChange: onCreateProjectFieldChange, onSubmit: onSubmitCreateProject,
