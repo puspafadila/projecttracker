@@ -3173,7 +3173,7 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
         h(CreateProjectField, { label:"Start Date" },
           h(DateInput, { value: form.startDate, onChange:e => onFieldChange("startDate", e.target.value), style:inputStyle }))),
       h("div", { style:{ background:"#EAF1F8", borderRight:cellBorder, borderBottom:cellBorder } },
-        h(CreateProjectField, { label:"End Date" },
+        h(CreateProjectField, { label:"End Date", required:false },
           h(DateInput, { value: form.endDate, onChange:e => onFieldChange("endDate", e.target.value), style:inputStyle }))),
       h("div", { style:{ background:"#EAF1F8", borderBottom:cellBorder } },
         h(CreateProjectField, { label:"TPO" },
@@ -3635,14 +3635,15 @@ function StreamSlide({ sr, taskDetails, period }) {
   const generatedOn = new Date().toLocaleDateString("en-US", { day:"2-digit", month:"short", year:"numeric" });
   const fmtShort = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { day:"2-digit", month:"short" }) : "";
   const periodLabel = period ? `Period: ${fmtShort(period.startDate)} \u2013 ${period.endDate ? fmtShort(period.endDate) : "present"}` : "";
-  const td = taskDetails || { completed: [], delayed: [] };
-  const topCompleted = td.completed.slice(0, 6);
-  const topDelayedTasks = td.delayed.slice(0, 6);
+  const td = taskDetails || { completed: [], delayed: [], inProgress: [] };
+  const topCompleted = td.completed.slice(0, 5);
+  const topInProgress = (td.inProgress || []).slice(0, 5);
+  const topDelayedTasks = td.delayed.slice(0, 5);
   const topDelayedProjects = sr.atRisk.slice(0, 6);
 
-  const taskRow = (t, color) => h("div", { key:t.id, style:{ fontSize:11.5, color:"#334155", display:"flex", justifyContent:"space-between", gap:8, marginBottom:5 } },
-    h("span", { style:{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, `${t.task} `, h("span", { style:{ color:"#94A3B8" } }, `\u2014 ${t.project}`)),
-    h("span", { style:{ color, fontWeight:600, flexShrink:0 } }, t.date || "\u2014")
+  const taskRow = (t, color) => h("div", { key:t.id, style:{ fontSize:11, marginBottom:7, lineHeight:1.35, wordBreak:"break-word" } },
+    h("span", { style:{ color:"#152238", fontWeight:700 } }, t.application || "\u2014"),
+    h("span", { style:{ color:"#94A3B8" } }, ` - ${t.project} - ${t.task} - ${t.pic} - ${t.date || "\u2014"}`)
   );
 
   return h("div", {
@@ -3692,15 +3693,22 @@ function StreamSlide({ sr, taskDetails, period }) {
       )
     ),
 
-    h("div", { style:{ display:"flex", gap:20, marginBottom:16 } },
-      h("div", { style:{ flex:1 } },
+    h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:16, marginBottom:16 } },
+      h("div", null,
         h("div", { style:{ fontSize:13, fontWeight:700, color:"#166534", marginBottom:6 } }, `\u2713 Tasks Completed (${td.completed.length})`),
         topCompleted.length === 0
           ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
           : topCompleted.map(t => taskRow(t, "#166534")),
         td.completed.length > topCompleted.length && h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `\u2026and ${td.completed.length - topCompleted.length} more`)
       ),
-      h("div", { style:{ flex:1 } },
+      h("div", null,
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E3A5F", marginBottom:6 } }, `\u23F3 Tasks In Progress (${(td.inProgress || []).length})`),
+        topInProgress.length === 0
+          ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
+          : topInProgress.map(t => taskRow(t, "#1E3A5F")),
+        (td.inProgress || []).length > topInProgress.length && h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `\u2026and ${(td.inProgress || []).length - topInProgress.length} more`)
+      ),
+      h("div", null,
         h("div", { style:{ fontSize:13, fontWeight:700, color:"#C2410C", marginBottom:6 } }, `\u26A0 Tasks Delayed (${td.delayed.length})`),
         topDelayedTasks.length === 0
           ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
@@ -3720,7 +3728,7 @@ function StreamSlide({ sr, taskDetails, period }) {
         ))
       ),
       sr.atRisk.length > topDelayedProjects.length && h("div", { style:{ fontSize:11, color:"#94A3B8", marginTop:4 } }, `\u2026and ${sr.atRisk.length - topDelayedProjects.length} more`),
-      sr.unlockNeededDetails.length > 0 && h("div", { style:{ marginTop:12, fontSize:12.5, fontWeight:700, color:"#EA580C" } },
+      h("div", { style:{ marginTop:12, fontSize:12.5, fontWeight:700, color:"#EA580C" } },
         `\u2691 Unlock needed: ${sr.unlockNeededDetails.length} task${sr.unlockNeededDetails.length === 1 ? "" : "s"}`
       )
     ),
@@ -3939,24 +3947,27 @@ function buildPeriodTaskDetails(items, startDate, endDate, todayISO) {
     if (endDate && d > endDate) return false;
     return true;
   };
-  const completed = [], delayed = [];
+  const completed = [], delayed = [], inProgress = [];
   items.forEach(ps => {
     ps.tasks.forEach(t => {
       if (!inRange(t.endDate)) return;
       const entry = { id:`t-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.endDate, source:"Project Timeline", project:ps.row.project || "Untitled", application:ps.row.application || "" };
       if (norm(t.status).toLowerCase() === "done") completed.push(entry);
       if (isDelayedItem(t, "endDate", todayISO)) delayed.push(entry);
+      if (norm(t.status).toLowerCase() === "in progress") inProgress.push(entry);
     });
     ps.todos.forEach(t => {
       if (!inRange(t.dueDate)) return;
       const entry = { id:`d-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.dueDate, source:"Tasks", project:ps.row.project || "Untitled", application:ps.row.application || "" };
       if (norm(t.status).toLowerCase() === "done") completed.push(entry);
       if (isDelayedItem(t, "dueDate", todayISO)) delayed.push(entry);
+      if (norm(t.status).toLowerCase() === "in progress") inProgress.push(entry);
     });
   });
   completed.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   delayed.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-  return { completed, delayed };
+  inProgress.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  return { completed, delayed, inProgress };
 }
 
 function computePhaseCategoryReports(projectStats, todayISO) {
@@ -4915,7 +4926,7 @@ function AppRoot() {
     const REQUIRED_FIELDS = [
       ["application","Application"], ["deliveryModel","Delivery Model"], ["project","Project"],
       ["resource","Resource"], ["mountain","Mountain"], ["stream","Stream"], ["subStream","Sub Stream"],
-      ["startDate","Start Date"], ["endDate","End Date"], ["tpo","TPO"], ["deliveryLead","Delivery Lead"],
+      ["startDate","Start Date"], ["tpo","TPO"], ["deliveryLead","Delivery Lead"],
       ["priority","Priority"], ["phase","Phase"], ["goLivePlan","Go Live Plan"]
     ];
     const missing = REQUIRED_FIELDS.filter(([key]) => !norm(createProjectForm[key])).map(([, label]) => label);
