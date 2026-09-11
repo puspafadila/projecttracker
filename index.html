@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
 *{box-sizing:border-box}
 html{font-size:15px}
@@ -2029,6 +2030,42 @@ const PLACEHOLDER_TITLES = { ...DOC_TITLES, ...STANDALONE_PLACEHOLDER_TITLES };
 /* A plain window.alert() replacement — native alert()/confirm() are
    silently blocked in some sandboxed preview contexts (e.g. iframe
    previews), so anything the user MUST see uses this instead. */
+/* Asks for the period (Start Date required, End Date optional) used to
+   pick which tasks appear in a stream's downloadable JPG report. */
+function DownloadPeriodModal({ open, onConfirm, onCancel }) {
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => { if (open) { setStartDate(""); setEndDate(""); setError(""); } }, [open]);
+  if (!open) return null;
+  const handleConfirm = () => {
+    if (!startDate) { setError("Start Date is required."); return; }
+    if (endDate && endDate < startDate) { setError("End Date can't be before Start Date."); return; }
+    onConfirm(startDate, endDate || null);
+  };
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:210, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onCancel
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, padding:24, maxWidth:380, width:"100%", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238", marginBottom:4 } }, "Report period"),
+      h("div", { style:{ fontSize:12.5, color:"#64748B", marginBottom:16 } }, "Which tasks (by End Date / Due Date) should this report include?"),
+      h("label", { style:{ fontSize:11, color:"#64748B", fontWeight:600, display:"block", marginBottom:4 } }, "Start Date *"),
+      h(DateInput, { value:startDate, onChange:e => setStartDate(e.target.value), style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px", outline:"none", marginBottom:12 } }),
+      h("label", { style:{ fontSize:11, color:"#64748B", fontWeight:600, display:"block", marginBottom:4 } }, "End Date (optional)"),
+      h(DateInput, { value:endDate, onChange:e => setEndDate(e.target.value), style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px", outline:"none", marginBottom:4 } }),
+      error && h("div", { style:{ fontSize:12, color:"#DC2626", marginTop:8 } }, error),
+      h("div", { style:{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18 } },
+        h("button", { className:"btn", onClick:onCancel }, "Cancel"),
+        h("button", { className:"btn btn-primary", onClick:handleConfirm }, "Generate Report")
+      )
+    )
+  );
+}
+
 function MessageModal({ open, title, message, tone = "info", onClose }) {
   if (!open) return null;
   const titleColor = tone === "error" ? "#DC2626" : "#152238";
@@ -3588,6 +3625,110 @@ function ProjectBaselineView({
 /* =========================================================================
    DASHBOARD REPORT
    ========================================================================= */
+/* Off-screen 16:9 "slide" used to generate a downloadable JPG snapha of a
+   stream's report (captured via html2canvas, never shown on screen). */
+/* Off-screen 16:9 "slide" used to generate a downloadable JPG snapshot of
+   a stream's report (captured via html2canvas, never shown on screen).
+   taskDetails ({ completed, delayed }) is computed for a chosen date
+   period (Start Date required, End Date optional) right before capture. */
+function StreamSlide({ sr, taskDetails, period }) {
+  const generatedOn = new Date().toLocaleDateString("en-US", { day:"2-digit", month:"short", year:"numeric" });
+  const fmtShort = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { day:"2-digit", month:"short" }) : "";
+  const periodLabel = period ? `Period: ${fmtShort(period.startDate)} \u2013 ${period.endDate ? fmtShort(period.endDate) : "present"}` : "";
+  const td = taskDetails || { completed: [], delayed: [] };
+  const topCompleted = td.completed.slice(0, 6);
+  const topDelayedTasks = td.delayed.slice(0, 6);
+  const topDelayedProjects = sr.atRisk.slice(0, 6);
+
+  const taskRow = (t, color) => h("div", { key:t.id, style:{ fontSize:11.5, color:"#334155", display:"flex", justifyContent:"space-between", gap:8, marginBottom:5 } },
+    h("span", { style:{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, `${t.task} `, h("span", { style:{ color:"#94A3B8" } }, `\u2014 ${t.project}`)),
+    h("span", { style:{ color, fontWeight:600, flexShrink:0 } }, t.date || "\u2014")
+  );
+
+  return h("div", {
+    id: `slide-${sr.streamName}`,
+    style: {
+      position:"fixed", left:-99999, top:0, width:1280, height:720, background:"#fff",
+      fontFamily:"Inter, system-ui, sans-serif", padding:"36px 52px", boxSizing:"border-box",
+      display:"flex", flexDirection:"column"
+    }
+  },
+    h("div", { style:{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:4 } },
+      h("div", { style:{ fontSize:12, fontWeight:700, color:"#4F9D9D", letterSpacing:0.5, textTransform:"uppercase" } }, "Project Tracker \u00B7 Stream Report"),
+      h("div", { style:{ textAlign:"right" } },
+        h("div", { style:{ fontSize:12, color:"#94A3B8" } }, `Generated ${generatedOn}`),
+        periodLabel && h("div", { style:{ fontSize:11, color:"#94A3B8" } }, periodLabel)
+      )
+    ),
+    h("div", { style:{ display:"flex", alignItems:"baseline", justifyContent:"space-between", marginBottom:12 } },
+      h("div", { style:{ fontSize:30, fontWeight:800, color:"#152238" } }, sr.streamName),
+      h("div", { style:{ fontSize:13, color:"#64748B" } },
+        `${sr.active} active \u00B7 ${sr.total} total \u00B7 `,
+        h("span", { style:{ color: sr.cancelled > 0 ? "#64748B" : "#94A3B8" } }, `${sr.cancelled} cancelled`)
+      )
+    ),
+
+    h("div", { style:{ height:10, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:8 } },
+      sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
+      sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
+      sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctHold}%`, background:"#F59E0B" } })
+    ),
+    h("div", { style:{ display:"flex", gap:18, fontSize:11.5, color:"#64748B", marginBottom:16 } },
+      h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed ${sr.pctCompleted}% (${sr.completed})`),
+      h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
+      h("span", null, h("span", { style:{ color:"#F59E0B", fontWeight:700 } }, "\u25CF "), `Hold ${sr.pctHold}% (${sr.hold})`)
+    ),
+
+    h("div", { style:{ marginBottom:18 } },
+      h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238", marginBottom:8 } }, "Phase Category Report"),
+      h("div", { style:{ display:"flex", gap:10 } },
+        sr.phaseCategories.map(cat => h("div", {
+          key:cat.key, style:{ flex:1, background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px" }
+        },
+          h("div", { style:{ fontSize:12, fontWeight:700, color:"#334155", marginBottom:2 } }, cat.label),
+          h("div", { style:{ fontSize:11, color:"#64748B" } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
+          h("div", { style:{ fontSize:11, color:"#166534", fontWeight:600 } }, `${cat.pctTaskCompleted}% tasks done`)
+        ))
+      )
+    ),
+
+    h("div", { style:{ display:"flex", gap:20, marginBottom:16 } },
+      h("div", { style:{ flex:1 } },
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#166534", marginBottom:6 } }, `\u2713 Tasks Completed (${td.completed.length})`),
+        topCompleted.length === 0
+          ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
+          : topCompleted.map(t => taskRow(t, "#166534")),
+        td.completed.length > topCompleted.length && h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `\u2026and ${td.completed.length - topCompleted.length} more`)
+      ),
+      h("div", { style:{ flex:1 } },
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#C2410C", marginBottom:6 } }, `\u26A0 Tasks Delayed (${td.delayed.length})`),
+        topDelayedTasks.length === 0
+          ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
+          : topDelayedTasks.map(t => taskRow(t, "#C2410C")),
+        td.delayed.length > topDelayedTasks.length && h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `\u2026and ${td.delayed.length - topDelayedTasks.length} more`)
+      )
+    ),
+
+    h("div", { style:{ flex:1, minHeight:0 } },
+      h("div", { style:{ fontSize:13, fontWeight:700, color: topDelayedProjects.length > 0 ? "#C2410C" : "#166534", marginBottom:8 } },
+        topDelayedProjects.length > 0 ? `\u26A0 Delayed Projects (${sr.atRisk.length})` : "\u2713 No delayed projects"
+      ),
+      h("div", { style:{ display:"flex", flexWrap:"wrap", columnGap:40, rowGap:5 } },
+        topDelayedProjects.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", gap:10, width:"calc(50% - 20px)" } },
+          h("span", { style:{ flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, ps.row.project || "\u2014"),
+          h("span", { style:{ color:"#C2410C", fontWeight:600, flexShrink:0 } }, ps.riskLabel)
+        ))
+      ),
+      sr.atRisk.length > topDelayedProjects.length && h("div", { style:{ fontSize:11, color:"#94A3B8", marginTop:4 } }, `\u2026and ${sr.atRisk.length - topDelayedProjects.length} more`),
+      sr.unlockNeededDetails.length > 0 && h("div", { style:{ marginTop:12, fontSize:12.5, fontWeight:700, color:"#EA580C" } },
+        `\u2691 Unlock needed: ${sr.unlockNeededDetails.length} task${sr.unlockNeededDetails.length === 1 ? "" : "s"}`
+      )
+    ),
+
+    h("div", { style:{ fontSize:11, color:"#CBD5E1", marginTop:12, textAlign:"right" } }, "Paracorp Group \u00B7 Project Tracker")
+  );
+}
+
 function StatCard({ label, value, sub, color }) {
   return h("div", { className:"card", style:{ flex:"1 1 180px", minWidth:160 } },
     h("div", { style:{ fontSize:12, color:"#64748B", fontWeight:600, marginBottom:6 } }, label),
@@ -3753,8 +3894,11 @@ function computeProjectStats(projectList, records, todayISO) {
     const progress = computeTimelineProgress(tasks, todos);
     const completed = isCompletedPhase(row.phase);
     let riskLabel = null;
-    if (row.endDate && !completed) {
-      const daysDiff = Math.round((new Date(row.endDate + "T00:00:00") - new Date(todayISO + "T00:00:00")) / 86400000);
+    // Delayed Projects excludes phases 6, 60, 61, 62 specifically \u2014 a
+    // broader set than isCompletedPhase() (used elsewhere), since a
+    // Hold (62) project isn't "overdue", it's deliberately paused.
+    if (row.goLivePlan && !["6","60","61","62"].includes(phaseLeadingCode(row.phase))) {
+      const daysDiff = Math.round((new Date(row.goLivePlan + "T00:00:00") - new Date(todayISO + "T00:00:00")) / 86400000);
       if (daysDiff < 0) riskLabel = `Overdue by ${Math.abs(daysDiff)} day${Math.abs(daysDiff) === 1 ? "" : "s"}`;
     }
     return { row, progress, completed, riskLabel, tasks, todos };
@@ -3780,11 +3924,41 @@ const isDoneItem = t => norm(t.status).toLowerCase() === "done";
    view specifically wants Phase 5 (Go Live Prep) counted under Completed. */
 const PHASE_CATEGORY_DEFS = [
   { key:"design", label:"Design", codes:["0","1","2"] },
-  { key:"development", label:"Development", codes:["3","4"] },
-  { key:"completed", label:"Completed", codes:["5","6","60"] },
+  { key:"development", label:"Development", codes:["3","4","5"] },
+  { key:"completed", label:"Completed", codes:["6","60"] },
   { key:"cancelled", label:"Cancelled", codes:["61"] },
   { key:"hold", label:"Hold", codes:["62"] },
 ];
+/* For the JPG report: pulls task/to-do details (from Project Timeline +
+   Tasks) whose date falls within [startDate, endDate] (endDate optional
+   \u2014 open-ended if omitted), split into Completed vs Delayed. */
+function buildPeriodTaskDetails(items, startDate, endDate, todayISO) {
+  const inRange = d => {
+    if (!d) return false;
+    if (d < startDate) return false;
+    if (endDate && d > endDate) return false;
+    return true;
+  };
+  const completed = [], delayed = [];
+  items.forEach(ps => {
+    ps.tasks.forEach(t => {
+      if (!inRange(t.endDate)) return;
+      const entry = { id:`t-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.endDate, source:"Project Timeline", project:ps.row.project || "Untitled", application:ps.row.application || "" };
+      if (norm(t.status).toLowerCase() === "done") completed.push(entry);
+      if (isDelayedItem(t, "endDate", todayISO)) delayed.push(entry);
+    });
+    ps.todos.forEach(t => {
+      if (!inRange(t.dueDate)) return;
+      const entry = { id:`d-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.dueDate, source:"Tasks", project:ps.row.project || "Untitled", application:ps.row.application || "" };
+      if (norm(t.status).toLowerCase() === "done") completed.push(entry);
+      if (isDelayedItem(t, "dueDate", todayISO)) delayed.push(entry);
+    });
+  });
+  completed.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  delayed.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  return { completed, delayed };
+}
+
 function computePhaseCategoryReports(projectStats, todayISO) {
   return PHASE_CATEGORY_DEFS.map(def => {
     const items = projectStats.filter(ps => def.codes.includes(phaseLeadingCode(ps.row.phase)));
@@ -3828,8 +4002,8 @@ function computeStreamReports(projectStats, todayISO) {
     const total = items.length;
     const cancelled = items.filter(ps => phaseCode(ps) === "61").length;
     const active = total - cancelled;
-    const completed = items.filter(ps => ["5","6","60"].includes(phaseCode(ps))).length;
-    const inProgress = items.filter(ps => ["0","1","2","3","4"].includes(phaseCode(ps))).length;
+    const completed = items.filter(ps => ["6","60"].includes(phaseCode(ps))).length;
+    const inProgress = items.filter(ps => ["0","1","2","3","4","5"].includes(phaseCode(ps))).length;
     const hold = items.filter(ps => phaseCode(ps) === "62").length;
     const pct = n => active ? Math.round((n / active) * 100) : 0;
     const delayedTaskDetails = [];
@@ -3868,7 +4042,8 @@ function computeStreamReports(projectStats, todayISO) {
       overallPct: pct(completed),
       atRisk: items.filter(ps => ps.riskLabel),
       delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails, unlockNeededDetails,
-      phaseCategories: computePhaseCategoryReports(items, todayISO)
+      phaseCategories: computePhaseCategoryReports(items, todayISO),
+      projectItems: items
     };
   }).sort((a, b) => a.streamName.localeCompare(b.streamName));
 }
@@ -3878,21 +4053,25 @@ function DashboardReportView({ projectList, records }) {
   const projectStats = useMemo(() => computeProjectStats(projectList, records, todayISO), [projectList, records, todayISO]);
   const [expandedDelayed, setExpandedDelayed] = useState({});
   const toggleDelayed = streamName => setExpandedDelayed(s => ({ ...s, [streamName]: !s[streamName] }));
+  const [modalMsg, setModalMsg] = useState(null); // { title, message, tone }
+  const showMessage = (message, title, tone = "info") => setModalMsg({ title, message, tone });
 
   const overall = useMemo(() => {
     const phaseCode = ps => phaseLeadingCode(ps.row.phase);
     const totalProjects = projectStats.length;
     const cancelledCount = projectStats.filter(ps => phaseCode(ps) === "61").length;
     const activeCount = totalProjects - cancelledCount;
-    const completedCount = projectStats.filter(ps => ["5","6","60"].includes(phaseCode(ps))).length;
-    const inProgressCount = projectStats.filter(ps => ["0","1","2","3","4"].includes(phaseCode(ps))).length;
+    const completedCount = projectStats.filter(ps => ["6","60"].includes(phaseCode(ps))).length;
+    const inProgressCount = projectStats.filter(ps => ["0","1","2","3","4","5"].includes(phaseCode(ps))).length;
     const holdCount = projectStats.filter(ps => phaseCode(ps) === "62").length;
+    const delayedCount = projectStats.filter(ps => ps.riskLabel).length;
     const pct = n => activeCount ? Math.round((n / activeCount) * 100) : 0;
     return {
       totalProjects, activeCount, cancelledCount,
       completedCount, completedPct: pct(completedCount),
       inProgressCount, inProgressPct: pct(inProgressCount),
-      holdCount, holdPct: pct(holdCount)
+      holdCount, holdPct: pct(holdCount),
+      delayedCount
     };
   }, [projectStats]);
 
@@ -3900,6 +4079,48 @@ function DashboardReportView({ projectList, records }) {
   const [expandedCategory, setExpandedCategory] = useState({}); // { [`${stream}::${catKey}`]: "projects" | "delayed" | null }
   const [expandedPhaseSection, setExpandedPhaseSection] = useState({}); // { [streamName]: boolean }
   const [expandedUnlock, setExpandedUnlock] = useState({}); // { [streamName]: boolean }
+  const [downloadingStream, setDownloadingStream] = useState(null);
+  const [downloadModalStream, setDownloadModalStream] = useState(null);
+  const [pendingCapture, setPendingCapture] = useState(null); // { sr, taskDetails, period }
+
+  const handleConfirmPeriod = (startDate, endDate) => {
+    const sr = streamReports.find(s => s.streamName === downloadModalStream);
+    setDownloadModalStream(null);
+    if (!sr) return;
+    const taskDetails = buildPeriodTaskDetails(sr.projectItems, startDate, endDate, todayISO);
+    setDownloadingStream(sr.streamName);
+    setPendingCapture({ sr, taskDetails, period: { startDate, endDate } });
+  };
+
+  useEffect(() => {
+    if (!pendingCapture) return;
+    let cancelled = false;
+    (async () => {
+      // Two animation frames so the (just-rendered) hidden slide is fully
+      // painted before html2canvas reads it.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      if (cancelled) return;
+      const streamName = pendingCapture.sr.streamName;
+      try {
+        if (!window.html2canvas) { showMessage("Image export isn't available right now \u2014 try reloading the page.", "Download failed", "error"); return; }
+        const el = document.getElementById(`slide-${streamName}`);
+        if (!el) return;
+        const canvas = await window.html2canvas(el, { scale:2, backgroundColor:"#ffffff", width:1280, height:720 });
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+        const a = document.createElement("a");
+        a.href = dataUrl;
+        a.download = `${streamName.replace(/[^a-z0-9]+/gi, "_")}_Report_${new Date().toISOString().slice(0,10)}.jpg`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (err) {
+        if (!cancelled) showMessage("Something went wrong generating the image. Please try again.", "Download failed", "error");
+      }
+      if (!cancelled) { setPendingCapture(null); setDownloadingStream(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [pendingCapture]);
+
   const toggleCategory = (catKey, section) => setExpandedCategory(s => ({ ...s, [catKey]: s[catKey] === section ? null : section }));
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
@@ -3912,8 +4133,14 @@ function DashboardReportView({ projectList, records }) {
       ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "No projects yet. Add one via the \"Create Project\" menu.")
       : h("div", null,
           h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(5, minmax(0, 1fr))", gap:14, marginBottom:20 } },
-            h(StatCard, { label:"% Completed", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.activeCount} active projects (Phase 5, 6, 60)` }),
-            h(StatCard, { label:"% In Progress", value:`${overall.inProgressPct}%`, color:"#1E3A5F", sub:`${overall.inProgressCount}/${overall.activeCount} active projects (Phase 0\u20134)` }),
+            h(StatCard, { label:"% Completed", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.activeCount} active projects (Phase 6, 60)` }),
+            h(StatCard, {
+              label:"% In Progress", value:`${overall.inProgressPct}%`, color:"#1E3A5F",
+              sub: h("span", null,
+                `${overall.inProgressCount}/${overall.activeCount} active projects (Phase 0\u20135) \u00B7 `,
+                h("span", { style:{ color: overall.delayedCount > 0 ? "#DC2626" : "#94A3B8", fontWeight:700 } }, `${overall.delayedCount} delayed`)
+              )
+            }),
             h(StatCard, { label:"% Hold", value:`${overall.holdPct}%`, color: overall.holdCount > 0 ? "#C2410C" : "#166534", sub:`${overall.holdCount}/${overall.activeCount} active projects (Phase 62)` }),
             h(StatCard, { label:"Total Active", value:overall.activeCount, sub:`${overall.totalProjects} total \u2212 ${overall.cancelledCount} cancelled` }),
             h(StatCard, { label:"Total Cancelled", value:overall.cancelledCount, color: overall.cancelledCount > 0 ? "#64748B" : "#166534", sub:"Phase 61" })
@@ -3925,7 +4152,18 @@ function DashboardReportView({ projectList, records }) {
                 h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238" } }, sr.streamName),
                 h("div", { style:{ fontSize:12, color:"#64748B", marginTop:2 } }, `${sr.projectCount} project${sr.projectCount === 1 ? "" : "s"} \u00B7 ${sr.active} active \u00B7 ${sr.cancelled} cancelled`)
               ),
-              h("div", { style:{ fontSize:18, fontWeight:800, color: sr.overallPct === 100 ? "#166534" : "#1E3A5F" } }, `${sr.overallPct}%`)
+              h("div", { style:{ display:"flex", alignItems:"center", gap:12 } },
+                h("button", {
+                  onClick: () => setDownloadModalStream(sr.streamName),
+                  disabled: downloadingStream === sr.streamName,
+                  className:"btn", title:"Download this stream's report as a JPG",
+                  style:{ display:"flex", alignItems:"center", gap:6, fontSize:12 }
+                },
+                  h(Icon.download, {}),
+                  downloadingStream === sr.streamName ? "Generating\u2026" : "Download"
+                ),
+                h("div", { style:{ fontSize:18, fontWeight:800, color: sr.overallPct === 100 ? "#166534" : "#1E3A5F" } }, `${sr.overallPct}%`)
+              )
             ),
 
             h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:10 } },
@@ -4065,7 +4303,14 @@ function DashboardReportView({ projectList, records }) {
             )
             )
           )),
-        )
+        ),
+    h(MessageModal, { open: !!modalMsg, title: modalMsg && modalMsg.title, message: modalMsg && modalMsg.message, tone: modalMsg && modalMsg.tone, onClose: () => setModalMsg(null) }),
+    h(DownloadPeriodModal, {
+      open: downloadModalStream !== null,
+      onConfirm: handleConfirmPeriod,
+      onCancel: () => setDownloadModalStream(null)
+    }),
+    pendingCapture && h(StreamSlide, { sr: pendingCapture.sr, taskDetails: pendingCapture.taskDetails, period: pendingCapture.period })
   );
 }
 
