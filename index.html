@@ -487,6 +487,22 @@ function summarizeRowsDiffLines(tableLabel, diff, labelKey) {
   return lines;
 }
 
+/* Mandatory-field validation for Project Timeline / Tasks rows, run right
+   before Save so incomplete rows never get committed. */
+const TASK_REQUIRED_FIELDS = [["task","Task"],["startDate","Start Date"],["endDate","End Date"],["pic","PIC"],["status","Status"],["phase","Phase"]];
+const TODO_REQUIRED_FIELDS = [["task","Task"],["pic","PIC"],["dueDate","Due Date"],["status","Status"],["blocker","Blocker"]];
+function findIncompleteRows(rows, requiredFields, rowTypeLabel) {
+  const issues = [];
+  (rows || []).forEach((r, i) => {
+    const missing = requiredFields.filter(([k]) => !norm(r[k])).map(([, label]) => label);
+    if (missing.length) {
+      const name = norm(r.task) ? ` ("${r.task}")` : "";
+      issues.push(`${rowTypeLabel} #${i + 1}${name}: missing ${missing.join(", ")}`);
+    }
+  });
+  return issues;
+}
+
 const TASK_DIFF_COLUMNS = [
   { key:"task", label:"Task" }, { key:"startDate", label:"Start Date" }, { key:"endDate", label:"End Date" },
   { key:"pic", label:"PIC" }, { key:"status", label:"Status" }, { key:"phase", label:"Phase" }
@@ -752,7 +768,7 @@ function RagSelect({ value, options, bgMap, fgMap, onChange, strikeValues }) {
   const strike = strikeValues && strikeValues.includes(value);
   return h("select", {
     value: value || "", onChange: e => onChange(e.target.value),
-    style: { width:"100%", fontSize:12, fontWeight:600, border: value ? "1px solid transparent" : "1px solid #E2E8F0",
+    style: { width:"100%", fontSize:12, fontWeight:600, border: value ? "1px solid transparent" : "1px solid #DC2626",
       borderRadius:7, padding:"6px 4px", background:bg, color:fg, outline:"none", textAlign:"center",
       textDecoration: strike ? "line-through" : "none" }
   }, h("option",{value:""},"\u2014 select \u2014"), options.map(o => h("option",{key:o,value:o},o)));
@@ -1113,6 +1129,8 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
   const [pendingImport, setPendingImport] = useState(null);
+  const [modalMsg, setModalMsg] = useState(null); // { title, message, tone }
+  const showMessage = (message, title, tone = "info") => setModalMsg({ title, message, tone });
   const handleImportFile = e => {
     if (!currentUser || currentUser.role !== "superAdmin") { e.target.value = ""; return; }
     const file = e.target.files[0];
@@ -1145,7 +1163,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         }).filter(r => r.application || r.project);
 
         if (imported.length === 0) {
-          alert("No valid rows to import. Make sure the Application or Project column is filled in.");
+          showMessage("No valid rows to import. Make sure the Application or Project column is filled in.", "Import failed", "error");
           return;
         }
 
@@ -1168,7 +1186,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         if (dupErrors.length > 0) {
           const shown = dupErrors.slice(0, 10).join("\n");
           const more = dupErrors.length > 10 ? `\n\u2026and ${dupErrors.length - 10} more issue(s).` : "";
-          alert(`Import cancelled. Found ${dupErrors.length} duplicate Application + Project combination(s) within this file:\n\n${shown}${more}\n\nEach Application + Project combination must be unique within the file.`);
+          showMessage(`Found ${dupErrors.length} duplicate Application + Project combination(s) within this file:\n\n${shown}${more}\n\nEach Application + Project combination must be unique within the file.`, "Import cancelled", "error");
           return;
         }
 
@@ -1196,7 +1214,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         if (errors.length > 0) {
           const shown = errors.slice(0, 10).join("\n");
           const more = errors.length > 10 ? `\n\u2026and ${errors.length - 10} more issue(s).` : "";
-          alert(`Import cancelled. Found ${errors.length} value(s) that dont match Master Data Management:\n\n${shown}${more}\n\nFix the data in the file, or add these values to Master Data Management first.`);
+          showMessage(`Found ${errors.length} value(s) that dont match Master Data Management:\n\n${shown}${more}\n\nFix the data in the file, or add these values to Master Data Management first.`, "Import cancelled", "error");
           return;
         }
 
@@ -1216,9 +1234,9 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         }
 
         onImport(imported);
-        alert(`${imported.length} project(s) imported successfully.`);
+        showMessage(`${imported.length} project(s) imported successfully.`, "Import complete");
       } catch (err) {
-        alert("Failed to read the file. Make sure the format matches the template (.xlsx).");
+        showMessage("Failed to read the file. Make sure the format matches the template (.xlsx).", "Import failed", "error");
       }
     };
     reader.readAsArrayBuffer(file);
@@ -1246,7 +1264,7 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         const finalList = [...merged, ...freshStamped];
         onReplaceAll(finalList);
         setPendingImport(null);
-        alert(`Import complete \u2014 replaced ${duplicates.length} existing project(s), added ${freshStamped.length} new project(s).`);
+        showMessage(`Replaced ${duplicates.length} existing project(s), added ${freshStamped.length} new project(s).`, "Import complete");
       }
     }),
     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:20 } },
@@ -1269,7 +1287,8 @@ function ProjectListView({ projectList, onUpdate, onRemove, onReplaceAll, sortCo
         columns: columnOrder.filter(k => !hiddenColumns.includes(k) && PL_COL_BY_KEY[k]).map(k => PL_COL_BY_KEY[k]),
         showGantt: !ganttHidden, currentUser, filters, onFiltersChange
       })
-    )
+    ),
+    h(MessageModal, { open: !!modalMsg, title: modalMsg && modalMsg.title, message: modalMsg && modalMsg.message, tone: modalMsg && modalMsg.tone, onClose: () => setModalMsg(null) })
   );
 }
 
@@ -1290,13 +1309,14 @@ const COL_BY_KEY = Object.fromEntries(COLS.map(c => [c.key, c]));
 const DEFAULT_TASK_ORDER = COLS.filter(c => c.key !== "no" && c.key !== "action").map(c => c.key);
 
 function cellEditor(colKey, task, onUpdate, picListId, phaseOptions) {
+  const errStyle = (base, empty) => empty ? { ...base, border:"1px solid #DC2626" } : base;
   const textStyle = { width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" };
   const dateStyle = { width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"5px 6px", outline:"none" };
   switch (colKey) {
-    case "task": return h("input", { value: task.task||"", onChange:e=>onUpdate("task", e.target.value), placeholder:"Nama task\u2026", style:textStyle });
-    case "startDate": return h(DateInput, { value: task.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style:dateStyle });
-    case "endDate": return h(DateInput, { value: task.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style:dateStyle });
-    case "pic": return h("input", { value: task.pic||"", onChange:e=>onUpdate("pic", e.target.value), list:picListId, placeholder:"PIC", style:textStyle });
+    case "task": return h("input", { value: task.task||"", onChange:e=>onUpdate("task", e.target.value), placeholder:"Nama task\u2026", style: errStyle(textStyle, !norm(task.task)) });
+    case "startDate": return h(DateInput, { value: task.startDate||"", onChange:e=>onUpdate("startDate", e.target.value), style: errStyle(dateStyle, !norm(task.startDate)) });
+    case "endDate": return h(DateInput, { value: task.endDate||"", onChange:e=>onUpdate("endDate", e.target.value), style: errStyle(dateStyle, !norm(task.endDate)) });
+    case "pic": return h("input", { value: task.pic||"", onChange:e=>onUpdate("pic", e.target.value), list:picListId, placeholder:"PIC", style: errStyle(textStyle, !norm(task.pic)) });
     case "status": return h(RagSelect, { value: task.status, options: STATUS_OPTS, bgMap: STATUS_BG, fgMap: STATUS_FG, strikeValues:["Cancelled"], onChange: v => onUpdate("status", v) });
     case "priority": return h(RagSelect, { value: task.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
     case "phase": {
@@ -1612,11 +1632,11 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
                   (t[c.key] || "\u2014")
                 ) :
                 c.key === "task" ? h("input", { value:t.task||"", onChange:e=>onUpdate(t.id,"task",e.target.value), placeholder:"Nama task\u2026",
-                    style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
+                    style:{ width:"100%", fontSize:13, border: norm(t.task) ? "1px solid #E2E8F0" : "1px solid #DC2626", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
                 c.key === "pic" ? h("input", { value:t.pic||"", onChange:e=>onUpdate(t.id,"pic",e.target.value), list:picListId, placeholder:"PIC",
-                    style:{ width:"100%", fontSize:13, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
+                    style:{ width:"100%", fontSize:13, border: norm(t.pic) ? "1px solid #E2E8F0" : "1px solid #DC2626", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
                 c.key === "dueDate" ? h(DateInput, { value:t.dueDate||"", onChange:e=>onUpdate(t.id,"dueDate",e.target.value),
-                    style:{ width:"100%", fontSize:12, border:"1px solid #E2E8F0", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
+                    style:{ width:"100%", fontSize:12, border: norm(t.dueDate) ? "1px solid #E2E8F0" : "1px solid #DC2626", borderRadius:7, padding:"6px 8px", outline:"none" } }) :
                 c.key === "status" ? h(RagSelect, { value:t.status, options: TODO_STATUS_OPTS, bgMap: STATUS_BG, fgMap: STATUS_FG, strikeValues:["Cancelled"], onChange:v=>onUpdate(t.id,"status",v) }) :
                 c.key === "blocker" ? h(RagSelect, { value:t.blocker, options: TODO_BLOCKER_OPTS, bgMap: TODO_BLOCKER_BG, fgMap: TODO_BLOCKER_FG, onChange:v=>onUpdate(t.id,"blocker",v) }) :
                 null
@@ -1792,10 +1812,25 @@ function DetailView({
   const effRemoveTodo = useDraft ? draftRemoveTodo : () => {};
   const effReorderTodo = useDraft ? draftReorderTodo : () => {};
 
+  const [modalMsg, setModalMsg] = useState(null); // { title, message, tone }
+  const showMessage = (message, title, tone = "info") => setModalMsg({ title, message, tone });
   const commit = () => {
+    const taskIssues = findIncompleteRows(draftTasks, TASK_REQUIRED_FIELDS, "Project Timeline row");
+    const todoIssues = findIncompleteRows(draftTodos, TODO_REQUIRED_FIELDS, "Tasks row");
+    const allIssues = [...taskIssues, ...todoIssues];
+    if (allIssues.length > 0) {
+      showMessage(
+        `Rows highlighted in red are missing data:\n\n` +
+        allIssues.slice(0, 10).join("\n") +
+        (allIssues.length > 10 ? `\n\u2026and ${allIssues.length - 10} more` : ""),
+        "Missing required fields", "error"
+      );
+      return false;
+    }
     onCommitRecord(draftTasks, draftTodos);
     if (projectRow) onSaveProjectFields(projectRow.id, draftProjectFields);
     setDirty(false);
+    return true;
   };
   useEffect(() => {
     if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
@@ -1846,10 +1881,10 @@ function DetailView({
           status: String(pick(row,"Status") || ""),
           phase: String(pick(row,"Phase") || "")
         })).filter(t => t.task);
-        if (imported.length === 0) alert("No valid rows to import. Make sure the Task column is filled in.");
-        else { effImportTasks(imported); alert(`${imported.length} task(s) imported \u2014 click Save at the bottom of the page to keep them.`); }
+        if (imported.length === 0) showMessage("No valid rows to import. Make sure the Task column is filled in.", "Import failed", "error");
+        else { effImportTasks(imported); showMessage(`${imported.length} task(s) imported \u2014 click Save at the bottom of the page to keep them.`, "Import complete"); }
       } catch (err) {
-        alert("Failed to read the file. Make sure the format matches the template (.xlsx).");
+        showMessage("Failed to read the file. Make sure the format matches the template (.xlsx).", "Import failed", "error");
       }
     };
     reader.readAsArrayBuffer(file);
@@ -1959,7 +1994,8 @@ function DetailView({
       editable: useDraft && canModifyRecord(projectRow, currentUser), currentUser,
       phaseOptions, mountainOptions, streamOptions, subStreamOptions, applicationOptions, deliveryModelOptions
     })
-    )
+    ),
+    h(MessageModal, { open: !!modalMsg, title: modalMsg && modalMsg.title, message: modalMsg && modalMsg.message, tone: modalMsg && modalMsg.tone, onClose: () => setModalMsg(null) })
   );
 }
 
@@ -1990,6 +2026,29 @@ const STANDALONE_PLACEHOLDER_TITLES = Object.fromEntries(
 );
 const PLACEHOLDER_TITLES = { ...DOC_TITLES, ...STANDALONE_PLACEHOLDER_TITLES };
 
+/* A plain window.alert() replacement — native alert()/confirm() are
+   silently blocked in some sandboxed preview contexts (e.g. iframe
+   previews), so anything the user MUST see uses this instead. */
+function MessageModal({ open, title, message, tone = "info", onClose }) {
+  if (!open) return null;
+  const titleColor = tone === "error" ? "#DC2626" : "#152238";
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:210, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onClose
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, padding:24, maxWidth:460, width:"100%", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ fontSize:15, fontWeight:700, color:titleColor, marginBottom:8 } }, title || (tone === "error" ? "Something needs attention" : "Notice")),
+      h("div", { style:{ fontSize:13, color:"#334155", marginBottom:20, whiteSpace:"pre-line", maxHeight:320, overflow:"auto", lineHeight:1.6 } }, message),
+      h("div", { style:{ display:"flex", justifyContent:"flex-end" } },
+        h("button", { className:"btn btn-primary", onClick:onClose }, "OK")
+      )
+    )
+  );
+}
+
 function UnsavedChangesModal({ open, onSave, onDiscard, onCancel }) {
   if (!open) return null;
   return h("div", {
@@ -2013,7 +2072,8 @@ function UnsavedChangesModal({ open, onSave, onDiscard, onCancel }) {
 function WizardSaveButton({ onSave, dirty }) {
   const [flash, setFlash] = useState(false);
   const handleClick = () => {
-    if (onSave) onSave();
+    const ok = onSave ? onSave() : true;
+    if (ok === false) return; // validation blocked the save — don't show "Saved"
     setFlash(true);
     setTimeout(() => setFlash(false), 1600);
   };
@@ -2201,7 +2261,7 @@ function ChangeManagementView({ applicationText, projectText, onApplicationChang
   const [draftNotes, setDraftNotes] = useState(() => notes || "");
   const [dirty, setDirty] = useState(false);
   const draftUpdateNotes = value => { setDraftNotes(value); setDirty(true); };
-  const commit = () => { onCommitNotes(draftNotes); setDirty(false); };
+  const commit = () => { onCommitNotes(draftNotes); setDirty(false); return true; };
   useEffect(() => {
     if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
   }, [dirty, draftNotes]);
@@ -2301,6 +2361,8 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
   useEffect(() => { if (!dirty) setDraft(masterData); }, [masterData]);
   const fileInputRef = useRef(null);
   const triggerImport = () => fileInputRef.current && fileInputRef.current.click();
+  const [modalMsg, setModalMsg] = useState(null); // { title, message, tone }
+  const showMessage = (message, title, tone = "info") => setModalMsg({ title, message, tone });
 
   const onExportMasterData = () => {
     const header = MASTER_DATA_CATEGORIES.map(c => c.label);
@@ -2351,7 +2413,7 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
         const wb = XLSX.read(data, { type:"array" });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, { defval:"", header:1 });
-        if (!rows.length) { alert("The file is empty."); return; }
+        if (!rows.length) { showMessage("The file is empty.", "Import failed", "error"); return; }
         const headerRow = rows[0].map(h => norm(String(h)));
         const colIndexByCat = {};
         MASTER_DATA_CATEGORIES.forEach(cat => {
@@ -2360,7 +2422,7 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
         });
         const foundCats = Object.keys(colIndexByCat);
         if (foundCats.length === 0) {
-          alert(`No matching columns found. Expected one or more of: ${MASTER_DATA_CATEGORIES.map(c => c.label).join(", ")}`);
+          showMessage(`No matching columns found. Expected one or more of: ${MASTER_DATA_CATEGORIES.map(c => c.label).join(", ")}`, "Import failed", "error");
           return;
         }
 
@@ -2391,12 +2453,12 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
           .filter(c => addedCounts[c.key])
           .map(c => `${c.label}: +${addedCounts[c.key]}`)
           .join("\n");
-        alert(summary
-          ? `Import complete. New values added (click Save to keep them):\n\n${summary}`
-          : "No new values found \u2014 everything in the file already exists."
+        showMessage(
+          summary ? `New values added (click Save to keep them):\n\n${summary}` : "No new values found \u2014 everything in the file already exists.",
+          "Import complete"
         );
       } catch (err) {
-        alert("Failed to read the file. Make sure it's a valid .xlsx file with one column per category (Phase, Mountain, Stream, Sub Stream, Applications, Delivery Model).");
+        showMessage("Failed to read the file. Make sure it's a valid .xlsx file with one column per category (Phase, Mountain, Stream, Sub Stream, Applications, Delivery Model).", "Import failed", "error");
       }
     };
     reader.readAsArrayBuffer(file);
@@ -2427,7 +2489,8 @@ function MasterDataManagementView({ masterData, onSaveAll, readOnly }) {
         items: (draft && draft[cat.key]) || [],
         onAdd: onAddItem, onUpdate: onUpdateItem, onRemove: onRemoveItem
       }))
-    )
+    ),
+    h(MessageModal, { open: !!modalMsg, title: modalMsg && modalMsg.title, message: modalMsg && modalMsg.message, tone: modalMsg && modalMsg.tone, onClose: () => setModalMsg(null) })
   );
 }
 
@@ -3432,6 +3495,7 @@ function ProjectBaselineView({
       dependencyRows: draftDependencyRows, riskLogRows: draftRiskLogRows, lessonsLearnedRows: draftLessonsLearnedRows
     });
     setDirty(false);
+    return true;
   };
   useEffect(() => {
     if (useDraft && onDraftStateChange) onDraftStateChange(dirty, commit);
@@ -3718,8 +3782,19 @@ function computeStreamReports(projectStats, todayISO) {
     const exploration = items.filter(ps => phaseCode(ps) === "0").length;
     const pct = n => total ? Math.round((n / total) * 100) : 0;
     const isDoneItem = t => norm(t.status).toLowerCase() === "done";
-    const delayedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(t => isDelayedItem(t, "endDate")).length, 0)
-      + items.reduce((sum, ps) => sum + ps.todos.filter(t => isDelayedItem(t, "dueDate")).length, 0);
+    const delayedTaskDetails = [];
+    items.forEach(ps => {
+      ps.tasks.filter(t => isDelayedItem(t, "endDate")).forEach(t => delayedTaskDetails.push({
+        id:`t-${t.id}`, source:"Project Timeline", task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.endDate,
+        project:ps.row.project || "Untitled", application:ps.row.application || ""
+      }));
+      ps.todos.filter(t => isDelayedItem(t, "dueDate")).forEach(t => delayedTaskDetails.push({
+        id:`d-${t.id}`, source:"Tasks", task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.dueDate,
+        project:ps.row.project || "Untitled", application:ps.row.application || ""
+      }));
+    });
+    delayedTaskDetails.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const delayedTaskCount = delayedTaskDetails.length;
     const completedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(isDoneItem).length, 0)
       + items.reduce((sum, ps) => sum + ps.todos.filter(isDoneItem).length, 0);
     const priorityRiskProjects = items
@@ -3734,7 +3809,7 @@ function computeStreamReports(projectStats, todayISO) {
       pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
       overallPct: pct(completed),
       atRisk: items.filter(ps => ps.riskLabel),
-      delayedTaskCount, completedTaskCount, priorityRiskProjects
+      delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails
     };
   }).sort((a, b) => a.streamName.localeCompare(b.streamName));
 }
@@ -3742,6 +3817,8 @@ function computeStreamReports(projectStats, todayISO) {
 function DashboardReportView({ projectList, records }) {
   const todayISO = new Date().toISOString().slice(0,10);
   const projectStats = useMemo(() => computeProjectStats(projectList, records, todayISO), [projectList, records, todayISO]);
+  const [expandedDelayed, setExpandedDelayed] = useState({});
+  const toggleDelayed = streamName => setExpandedDelayed(s => ({ ...s, [streamName]: !s[streamName] }));
 
   const overall = useMemo(() => {
     const totalProjects = projectStats.length;
@@ -3797,7 +3874,29 @@ function DashboardReportView({ projectList, records }) {
 
             h("div", { style:{ display:"flex", flexWrap:"wrap", gap:16, marginBottom:12, fontSize:12 } },
               h("span", { style:{ color:"#166534", fontWeight:600 } }, `Completed Tasks: ${sr.completedTaskCount}`),
-              h("span", { style:{ color: sr.delayedTaskCount > 0 ? "#C2410C" : "#64748B", fontWeight:600 } }, `Delayed Tasks: ${sr.delayedTaskCount}`)
+              h("button", {
+                onClick: () => toggleDelayed(sr.streamName),
+                disabled: sr.delayedTaskCount === 0,
+                style:{
+                  color: sr.delayedTaskCount > 0 ? "#C2410C" : "#64748B", fontWeight:600, background:"none", border:"none",
+                  padding:0, display:"flex", alignItems:"center", gap:4, cursor: sr.delayedTaskCount > 0 ? "pointer" : "default", fontSize:12
+                }
+              },
+                `Delayed Tasks: ${sr.delayedTaskCount}`,
+                sr.delayedTaskCount > 0 && h(expandedDelayed[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ flexShrink:0 } })
+              )
+            ),
+            sr.delayedTaskCount > 0 && expandedDelayed[sr.streamName] && h("div", {
+              style:{ border:"1px solid #FDE68A", background:"#FFFBEB", borderRadius:9, padding:"10px 12px", marginBottom:12, display:"flex", flexDirection:"column", gap:7, maxHeight:260, overflow:"auto" }
+            },
+              sr.delayedTaskDetails.map(d => h("div", { key:d.id, style:{ fontSize:12, color:"#78350F", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
+                h("span", null,
+                  h("span", { style:{ fontWeight:600 } }, d.task), " \u2014 ",
+                  h("span", { style:{ color:"#92400E" } }, `${d.project}${d.application ? ` (${d.application})` : ""}`), " \u00B7 ",
+                  h("span", { style:{ color:"#92400E" } }, d.source), " \u00B7 PIC: ", d.pic
+                ),
+                h("span", { style:{ fontWeight:600, flexShrink:0 } }, d.date || "No date")
+              ))
             ),
 
             h("div", { style:{ borderTop:"1px solid #F1F5F9", paddingTop:10 } },
@@ -4093,6 +4192,8 @@ function AppRoot() {
   // "logged in" flag can't fool the UI into skipping login while every
   // table's Row Level Security still requires a genuine session to read.
   const [currentUser, setCurrentUser] = useState(null);
+  const [modalMsg, setModalMsg] = useState(null); // { title, message, tone }
+  const showMessage = (message, title, tone = "info") => setModalMsg({ title, message, tone });
   const [activeView, setActiveView] = useState(stored.activeView || "list");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(!!stored.sidebarCollapsed);
   const onToggleSidebar = () => setSidebarCollapsed(c => !c);
@@ -4297,7 +4398,8 @@ function AppRoot() {
   const onWizardStepChange = newStep => guardedNavigate(() => setWizardStep(newStep));
   const onExitWizard = () => guardedNavigate(() => setActiveView("list"));
   const onConfirmSaveAndContinue = () => {
-    wizardCommitRef.current();
+    const ok = wizardCommitRef.current();
+    if (ok === false) return; // validation blocked the save — stay put so the user can fix it, keep the pending navigation queued
     setWizardDirty(false);
     wizardCommitRef.current = () => {};
     const action = pendingNavigation;
@@ -4419,7 +4521,7 @@ function AppRoot() {
     ];
     const missing = REQUIRED_FIELDS.filter(([key]) => !norm(createProjectForm[key])).map(([, label]) => label);
     if (missing.length > 0) {
-      alert(`Please fill in all fields before submitting. Missing: ${missing.join(", ")}`);
+      showMessage(`Missing: ${missing.join(", ")}`, "Please fill in all fields before submitting", "error");
       return;
     }
     const projectCode = nextProjectCode(createProjectForm.stream, projectList);
@@ -4432,7 +4534,7 @@ function AppRoot() {
 
   const onSaveProjectFields = (projectId, fields) => {
     if (!norm(fields.application) || !norm(fields.project)) {
-      alert("Application and Project are required.");
+      showMessage("Application and Project are required.", "Missing information", "error");
       return;
     }
     const oldRow = projectList.find(r => r.id === projectId);
@@ -4613,6 +4715,7 @@ function AppRoot() {
     h(UnsavedChangesModal, {
       open: pendingNavigation !== null, onSave: onConfirmSaveAndContinue, onDiscard: onConfirmDiscardAndContinue, onCancel: onCancelNavigation
     }),
+    h(MessageModal, { open: !!modalMsg, title: modalMsg && modalMsg.title, message: modalMsg && modalMsg.message, tone: modalMsg && modalMsg.tone, onClose: () => setModalMsg(null) }),
     h(Sidebar, { active: activeView, onNavigate: onSidebarNavigate, collapsed: sidebarCollapsed, onToggleCollapse: onToggleSidebar, currentUser, onLogout, remoteSaveFailed }),
     h("div", { style:{ flex:1, minWidth:0 } },
       activeView === "dashboard-report"
