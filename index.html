@@ -3667,12 +3667,17 @@ const TASK_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 2) / 3;
 /* Rendered once, off-screen, to measure each task row's REAL height
    (text can wrap to multiple lines depending on name length) before
    deciding how many rows actually fit per page. */
+const PHASE_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 4) / 5;
+
 function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, onMeasured }) {
   const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null), pRef = useRef(null);
+  const phaseRefs = useRef({});
   useEffect(() => {
     const measure = ref => ref.current ? Array.from(ref.current.children).map(el => el.getBoundingClientRect().height + 7) : [];
     const phaseCategoryHeight = pRef.current ? pRef.current.getBoundingClientRect().height : 0;
-    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseCategoryHeight });
+    const phaseProjectHeights = {};
+    phaseCategories.forEach(cat => { phaseProjectHeights[cat.key] = measure(phaseRefs.current[cat.key] || { current:null }); });
+    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseCategoryHeight, phaseProjectHeights });
     // eslint-disable-next-line
   }, []);
 
@@ -3685,7 +3690,10 @@ function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, onM
     h("div", { ref:cRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, completed.map(taskRow)),
     h("div", { ref:iRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, inProgress.map(taskRow)),
     h("div", { ref:dRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, delayed.map(taskRow)),
-    h("div", { ref:pRef, style:{ width:1280 - 52 * 2 } }, renderPhaseCategoryBoxes(phaseCategories))
+    h("div", { ref:pRef, style:{ width:1280 - 52 * 2 } }, renderPhaseCategoryBoxes(phaseCategories)),
+    phaseCategories.map(cat => h("div", {
+      key:cat.key, ref: el => { phaseRefs.current[cat.key] = { current: el }; }, style:{ width:PHASE_COLUMN_WIDTH_PX }
+    }, cat.projects.map((p, i) => phaseProjectRow(cat, p, i))))
   );
 }
 
@@ -3694,14 +3702,33 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
   const delayedProjects = sr.atRisk;
   const pages = [];
 
-  const page1TaskBudget = Math.max(80, PAGE1_COMBINED_BUDGET_PX - (measuredHeights.phaseCategoryHeight || 0) - 26);
-  const completedChunks = paginateItemsByHeight(completed, measuredHeights.completed, page1TaskBudget, CONTINUATION_TASK_BUDGET_PX);
-  const inProgressChunks = paginateItemsByHeight(inProgress, measuredHeights.inProgress, page1TaskBudget, CONTINUATION_TASK_BUDGET_PX);
-  const delayedChunks = paginateItemsByHeight(delayed, measuredHeights.delayed, page1TaskBudget, CONTINUATION_TASK_BUDGET_PX);
+  // Phase Category Report project-list pages come first (page 1 carries
+  // the stats/progress/phase boxes too, so its budget is whatever's left
+  // after those measured sections).
+  const page1Budget = Math.max(80, PAGE1_COMBINED_BUDGET_PX - (measuredHeights.phaseCategoryHeight || 0) - 26);
+  const chunksByCatPage = {};
+  let maxPhasePages = 1;
+  sr.phaseCategories.forEach(cat => {
+    const heights = measuredHeights.phaseProjectHeights ? measuredHeights.phaseProjectHeights[cat.key] : undefined;
+    const chunks = paginateItemsByHeight(cat.projects, heights, page1Budget, CONTINUATION_TASK_BUDGET_PX);
+    chunksByCatPage[cat.key] = chunks;
+    maxPhasePages = Math.max(maxPhasePages, chunks.length);
+  });
+  for (let i = 0; i < maxPhasePages; i++) {
+    const chunksByKey = {};
+    sr.phaseCategories.forEach(cat => { chunksByKey[cat.key] = chunksByCatPage[cat.key][i] || []; });
+    pages.push({ type:"phase-projects", isFirst: i === 0, chunksByKey });
+  }
+
+  // Task pages always start fresh (no stats/boxes to share room with,
+  // since those only ever appear on the very first phase-projects page).
+  const completedChunks = paginateItemsByHeight(completed, measuredHeights.completed, CONTINUATION_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
+  const inProgressChunks = paginateItemsByHeight(inProgress, measuredHeights.inProgress, CONTINUATION_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
+  const delayedChunks = paginateItemsByHeight(delayed, measuredHeights.delayed, CONTINUATION_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
   const taskPageCount = Math.max(completedChunks.length, inProgressChunks.length, delayedChunks.length, 1);
   for (let i = 0; i < taskPageCount; i++) {
     pages.push({
-      type:"tasks", isFirst: i === 0,
+      type:"tasks", isFirst:false,
       completedChunk: completedChunks[i] || [],
       inProgressChunk: inProgressChunks[i] || [],
       delayedChunk: delayedChunks[i] || []
@@ -3725,20 +3752,37 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
    both render identical markup (needed for the measured height to be
    accurate). */
 function renderPhaseCategoryBoxes(phaseCategories) {
-  return h("div", { style:{ display:"flex", gap:10, alignItems:"flex-start" } },
+  return h("div", { style:{ display:"flex", gap:10 } },
     phaseCategories.map(cat => h("div", {
       key:cat.key, style:{ flex:1, background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px" }
     },
       h("div", { style:{ fontSize:12, fontWeight:700, color:"#334155", marginBottom:2 } }, cat.label),
-      h("div", { style:{ fontSize:11, color:"#64748B", marginBottom:5 } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
-      h("div", { style:{ display:"flex", flexDirection:"column", gap:2 } },
-        cat.projects.length === 0
-          ? h("div", { style:{ fontSize:10, color:"#CBD5E1" } }, "\u2014")
-          : cat.projects.map((p, i) => h("div", { key:i, style:{ fontSize:10, color:"#475569", wordBreak:"break-word", lineHeight:1.4 } },
-              `${p.application} - ${p.project} - ${p.weekLabel} - ${p.progressPct}%`
-            ))
-      )
+      h("div", { style:{ fontSize:11, color:"#64748B" } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`)
     ))
+  );
+}
+
+const PHASE_PROJECT_COLORS = { design:"#4F9D9D", development:"#1E3A5F", completed:"#166534", cancelled:"#64748B", hold:"#EA580C" };
+/* Row format matches the Tasks Completed/In Progress/Delayed columns:
+   bold dark Application, then gray detail text. */
+function phaseProjectRow(cat, p, i) {
+  return h("div", { key:i, style:{ fontSize:11, marginBottom:7, lineHeight:1.35, wordBreak:"break-word" } },
+    h("span", { style:{ color:"#152238", fontWeight:700 } }, p.application),
+    h("span", { style:{ color:"#94A3B8" } }, cat.key === "development" ? ` - ${p.project} - ${p.weekLabel} - ${p.progressPct}%` : ` - ${p.project}`)
+  );
+}
+/* Shared between the actual slide page and the off-screen measurer. */
+function renderPhaseProjectColumns(phaseCategories, chunksByKey) {
+  return h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(5, 1fr)", gap:16 } },
+    phaseCategories.map(cat => {
+      const rows = chunksByKey ? (chunksByKey[cat.key] || []) : cat.projects;
+      return h("div", { key:cat.key },
+        h("div", { style:{ fontSize:13, fontWeight:700, color: PHASE_PROJECT_COLORS[cat.key] || "#152238", marginBottom:6 } }, `${cat.label} (${cat.projectCount})`),
+        rows.length === 0
+          ? (chunksByKey ? null : h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None."))
+          : rows.map((p, i) => phaseProjectRow(cat, p, i))
+      );
+    })
   );
 }
 
@@ -3789,6 +3833,10 @@ function StreamSlidePage({ sr, page, pageIndex, totalPages, totals, period }) {
     page.isFirst && h("div", { style:{ marginBottom:18 } },
       h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238", marginBottom:8 } }, "Phase Category Report"),
       renderPhaseCategoryBoxes(sr.phaseCategories)
+    ),
+
+    page.type === "phase-projects" && h("div", { style:{ marginBottom:16 } },
+      renderPhaseProjectColumns(sr.phaseCategories, page.chunksByKey)
     ),
 
     page.type === "tasks" && h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:16, marginBottom:16 } },
