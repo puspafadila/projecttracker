@@ -3674,7 +3674,7 @@ async function generateStreamAiAnalysis(streamName, diff, riskContext) {
       ...diff.updated.map(u => `  - ${u.snapshot.project}: ${u.changes.join("; ") || "minor change"}`),
       `Currently delayed projects: ${riskContext.delayedProjectNames.join(", ") || "none"}`,
       `Currently delayed tasks/to-dos: ${riskContext.delayedTaskCount}`,
-      `Projects by phase right now: completed ${riskContext.completed}, in progress ${riskContext.inProgress}, upcoming kick-off ${riskContext.upcoming}, exploration ${riskContext.exploration}`,
+      `Projects by phase right now: completed ${riskContext.completed}, in progress ${riskContext.inProgress}, hold ${riskContext.hold}, cancelled ${riskContext.cancelled}`,
       `Critical/High priority projects with no End Date set (these can't be scheduled or tracked properly): ${priorityRiskNames.join(", ") || "none"}`
     ];
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -3826,11 +3826,12 @@ function computeStreamReports(projectStats, todayISO) {
   const phaseCode = ps => phaseLeadingCode(ps.row.phase);
   return Object.entries(groups).map(([streamName, items]) => {
     const total = items.length;
-    const completed = items.filter(ps => isCompletedPhase(ps.row.phase)).length;
-    const inProgress = items.filter(ps => ["3","4","5"].includes(phaseCode(ps))).length;
-    const upcoming = items.filter(ps => ["1","2"].includes(phaseCode(ps))).length;
-    const exploration = items.filter(ps => phaseCode(ps) === "0").length;
-    const pct = n => total ? Math.round((n / total) * 100) : 0;
+    const cancelled = items.filter(ps => phaseCode(ps) === "61").length;
+    const active = total - cancelled;
+    const completed = items.filter(ps => ["5","6","60"].includes(phaseCode(ps))).length;
+    const inProgress = items.filter(ps => ["0","1","2","3","4"].includes(phaseCode(ps))).length;
+    const hold = items.filter(ps => phaseCode(ps) === "62").length;
+    const pct = n => active ? Math.round((n / active) * 100) : 0;
     const delayedTaskDetails = [];
     items.forEach(ps => {
       ps.tasks.filter(t => isDelayedItem(t, "endDate", todayISO)).forEach(t => delayedTaskDetails.push({
@@ -3844,6 +3845,14 @@ function computeStreamReports(projectStats, todayISO) {
     });
     delayedTaskDetails.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     const delayedTaskCount = delayedTaskDetails.length;
+    const unlockNeededDetails = [];
+    items.forEach(ps => {
+      ps.todos.filter(t => t.flagged).forEach(t => unlockNeededDetails.push({
+        id:`u-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", status:t.status || "\u2014", date:t.dueDate,
+        project:ps.row.project || "Untitled", application:ps.row.application || ""
+      }));
+    });
+    unlockNeededDetails.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     const completedTaskCount = items.reduce((sum, ps) => sum + ps.tasks.filter(isDoneItem).length, 0)
       + items.reduce((sum, ps) => sum + ps.todos.filter(isDoneItem).length, 0);
     const priorityRiskProjects = items
@@ -3853,12 +3862,12 @@ function computeStreamReports(projectStats, todayISO) {
       })
       .map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", priority: ps.row.priority }));
     return {
-      streamName, projectCount: total,
-      completed, inProgress, upcoming, exploration, total,
-      pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
+      streamName, projectCount: total, total, active, cancelled,
+      completed, inProgress, hold,
+      pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctHold: pct(hold),
       overallPct: pct(completed),
       atRisk: items.filter(ps => ps.riskLabel),
-      delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails,
+      delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails, unlockNeededDetails,
       phaseCategories: computePhaseCategoryReports(items, todayISO)
     };
   }).sort((a, b) => a.streamName.localeCompare(b.streamName));
@@ -3890,6 +3899,7 @@ function DashboardReportView({ projectList, records }) {
   const streamReports = useMemo(() => computeStreamReports(projectStats, todayISO), [projectStats, todayISO]);
   const [expandedCategory, setExpandedCategory] = useState({}); // { [`${stream}::${catKey}`]: "projects" | "delayed" | null }
   const [expandedPhaseSection, setExpandedPhaseSection] = useState({}); // { [streamName]: boolean }
+  const [expandedUnlock, setExpandedUnlock] = useState({}); // { [streamName]: boolean }
   const toggleCategory = (catKey, section) => setExpandedCategory(s => ({ ...s, [catKey]: s[catKey] === section ? null : section }));
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
@@ -3913,22 +3923,20 @@ function DashboardReportView({ projectList, records }) {
             h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, marginBottom:10 } },
               h("div", null,
                 h("div", { style:{ fontSize:15, fontWeight:700, color:"#152238" } }, sr.streamName),
-                h("div", { style:{ fontSize:12, color:"#64748B", marginTop:2 } }, `${sr.projectCount} project${sr.projectCount === 1 ? "" : "s"}`)
+                h("div", { style:{ fontSize:12, color:"#64748B", marginTop:2 } }, `${sr.projectCount} project${sr.projectCount === 1 ? "" : "s"} \u00B7 ${sr.active} active \u00B7 ${sr.cancelled} cancelled`)
               ),
               h("div", { style:{ fontSize:18, fontWeight:800, color: sr.overallPct === 100 ? "#166534" : "#1E3A5F" } }, `${sr.overallPct}%`)
             ),
 
             h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:10 } },
-              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
-              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
-              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctUpcoming}%`, background:"#60A5FA" } }),
-              sr.total > 0 && h("div", { style:{ height:"100%", width:`${sr.pctExploration}%`, background:"#CBD5E1" } })
+              sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
+              sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
+              sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctHold}%`, background:"#F59E0B" } })
             ),
             h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:12 } },
-              h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed Projects ${sr.pctCompleted}% (${sr.completed})`),
+              h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed ${sr.pctCompleted}% (${sr.completed})`),
               h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
-              h("span", null, h("span", { style:{ color:"#60A5FA", fontWeight:700 } }, "\u25CF "), `Upcoming Kick Off ${sr.pctUpcoming}% (${sr.upcoming})`),
-              h("span", null, h("span", { style:{ color:"#94A3B8", fontWeight:700 } }, "\u25CF "), `Exploration ${sr.pctExploration}% (${sr.exploration})`)
+              h("span", null, h("span", { style:{ color:"#F59E0B", fontWeight:700 } }, "\u25CF "), `Hold ${sr.pctHold}% (${sr.hold})`)
             ),
 
             h("div", { style:{ display:"flex", flexWrap:"wrap", gap:16, marginBottom:12, fontSize:12 } },
@@ -3968,6 +3976,28 @@ function DashboardReportView({ projectList, records }) {
                   h("span", { style:{ color:"#C2410C", fontWeight:600 } }, ps.riskLabel)
                 ))
               )
+            ),
+
+            h("button", {
+              onClick: () => setExpandedUnlock(s => ({ ...s, [sr.streamName]: !s[sr.streamName] })),
+              disabled: sr.unlockNeededDetails.length === 0,
+              style:{ display:"flex", alignItems:"center", gap:6, width:"100%", background:"none", border:"none",
+                cursor: sr.unlockNeededDetails.length > 0 ? "pointer" : "default",
+                margin:"16px 0 2px", borderTop:"1px solid #F1F5F9", paddingTop:12 }
+            },
+              sr.unlockNeededDetails.length > 0 && h(expandedUnlock[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ color:"#EA580C", flexShrink:0 } }),
+              h("span", { style:{ fontSize:13, fontWeight:700, color: sr.unlockNeededDetails.length > 0 ? "#EA580C" : "#94A3B8" } }, `\u2691 Unlock needed (${sr.unlockNeededDetails.length})`)
+            ),
+            expandedUnlock[sr.streamName] && sr.unlockNeededDetails.length > 0 && h("div", {
+              style:{ border:"1px solid #FED7AA", background:"#FFF7ED", borderRadius:9, padding:"10px 12px", margin:"8px 0 0", display:"flex", flexDirection:"column", gap:7, maxHeight:240, overflow:"auto" }
+            },
+              sr.unlockNeededDetails.map(u => h("div", { key:u.id, style:{ fontSize:12, color:"#7C2D12", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
+                h("span", null,
+                  h("span", { style:{ fontWeight:600 } }, u.task), " \u2014 ",
+                  h("span", { style:{ color:"#9A3412" } }, `${u.project}${u.application ? ` (${u.application})` : ""}`), " \u00B7 PIC: ", u.pic, " \u00B7 ", u.status
+                ),
+                h("span", { style:{ fontWeight:600, flexShrink:0 } }, u.date || "No date")
+              ))
             ),
 
             h("button", {
@@ -4230,7 +4260,7 @@ function WeeklyReportView({ weeklyReports, currentUser, onDeleteWeeklyReport, pr
         const riskContext = {
           delayedProjectNames: sr.atRisk.map(ps => ps.row.project || "Untitled"),
           delayedTaskCount: sr.delayedTaskCount,
-          completed: sr.completed, inProgress: sr.inProgress, upcoming: sr.upcoming, exploration: sr.exploration,
+          completed: sr.completed, inProgress: sr.inProgress, hold: sr.hold, cancelled: sr.cancelled,
           priorityRiskProjects: sr.priorityRiskProjects
         };
         const aiAnalysis = await generateStreamAiAnalysis(sr.streamName, diff, riskContext);
