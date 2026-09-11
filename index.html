@@ -3631,15 +3631,47 @@ function ProjectBaselineView({
    a stream's report (captured via html2canvas, never shown on screen).
    taskDetails ({ completed, delayed }) is computed for a chosen date
    period (Start Date required, End Date optional) right before capture. */
-function StreamSlide({ sr, taskDetails, period }) {
+/* Splits a stream's full task/delayed-project lists into "pages" that each
+   fit one 1280x720 slide without ever splitting a single row across two
+   images. Page 1 carries the stats/progress/phase summary too, so it has
+   less room for rows than a continuation page does. */
+const TASK_ROWS_PAGE1 = 4;
+const TASK_ROWS_CONTINUATION = 13;
+const DELAYED_PROJECTS_PER_PAGE = 16;
+function paginateStreamReport(sr, taskDetails) {
+  const completed = taskDetails.completed, inProgress = taskDetails.inProgress || [], delayed = taskDetails.delayed;
+  const delayedProjects = sr.atRisk;
+  const pages = [];
+
+  let ci = 0, ii = 0, di = 0, taskPageNum = 0;
+  do {
+    const budget = taskPageNum === 0 ? TASK_ROWS_PAGE1 : TASK_ROWS_CONTINUATION;
+    pages.push({
+      type:"tasks", isFirst: taskPageNum === 0,
+      completedChunk: completed.slice(ci, ci + budget),
+      inProgressChunk: inProgress.slice(ii, ii + budget),
+      delayedChunk: delayed.slice(di, di + budget)
+    });
+    ci += budget; ii += budget; di += budget; taskPageNum++;
+  } while (ci < completed.length || ii < inProgress.length || di < delayed.length);
+
+  let pi = 0, isFirstDpPage = true;
+  do {
+    pages.push({
+      type:"delayed-projects", isFirst:false,
+      delayedProjectsChunk: delayedProjects.slice(pi, pi + DELAYED_PROJECTS_PER_PAGE),
+      showUnlockNeeded: isFirstDpPage
+    });
+    pi += DELAYED_PROJECTS_PER_PAGE; isFirstDpPage = false;
+  } while (pi < delayedProjects.length);
+
+  return pages;
+}
+
+function StreamSlidePage({ sr, page, pageIndex, totals, period }) {
   const generatedOn = new Date().toLocaleDateString("en-US", { day:"2-digit", month:"short", year:"numeric" });
   const fmtShort = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { day:"2-digit", month:"short" }) : "";
   const periodLabel = period ? `Period: ${fmtShort(period.startDate)} \u2013 ${period.endDate ? fmtShort(period.endDate) : "present"}` : "";
-  const td = taskDetails || { completed: [], delayed: [], inProgress: [] };
-  const allCompleted = td.completed;
-  const allInProgress = td.inProgress || [];
-  const allDelayedTasks = td.delayed;
-  const allDelayedProjects = sr.atRisk;
 
   const taskRow = (t, color) => h("div", { key:t.id, style:{ fontSize:11, marginBottom:7, lineHeight:1.35, wordBreak:"break-word" } },
     h("span", { style:{ color:"#152238", fontWeight:700 } }, t.application || "\u2014"),
@@ -3647,9 +3679,9 @@ function StreamSlide({ sr, taskDetails, period }) {
   );
 
   return h("div", {
-    id: `slide-${sr.streamName}`,
+    id: `slide-${sr.streamName}-${pageIndex}`,
     style: {
-      position:"fixed", left:-99999, top:0, width:1280, background:"#fff",
+      position:"fixed", left:-99999, top:0, width:1280, height:720, background:"#fff",
       fontFamily:"Inter, system-ui, sans-serif", padding:"36px 52px", boxSizing:"border-box",
       display:"flex", flexDirection:"column"
     }
@@ -3662,25 +3694,25 @@ function StreamSlide({ sr, taskDetails, period }) {
       )
     ),
     h("div", { style:{ display:"flex", alignItems:"baseline", justifyContent:"space-between", marginBottom:12 } },
-      h("div", { style:{ fontSize:30, fontWeight:800, color:"#152238" } }, sr.streamName),
-      h("div", { style:{ fontSize:13, color:"#64748B" } },
+      h("div", { style:{ fontSize:30, fontWeight:800, color:"#152238" } }, sr.streamName + (page.isFirst ? "" : " (continued)")),
+      page.isFirst && h("div", { style:{ fontSize:13, color:"#64748B" } },
         `${sr.active} active \u00B7 ${sr.total} total \u00B7 `,
         h("span", { style:{ color: sr.cancelled > 0 ? "#64748B" : "#94A3B8" } }, `${sr.cancelled} cancelled`)
       )
     ),
 
-    h("div", { style:{ height:10, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:8 } },
+    page.isFirst && h("div", { style:{ height:10, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:8 } },
       sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
       sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
       sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctHold}%`, background:"#F59E0B" } })
     ),
-    h("div", { style:{ display:"flex", gap:18, fontSize:11.5, color:"#64748B", marginBottom:16 } },
+    page.isFirst && h("div", { style:{ display:"flex", gap:18, fontSize:11.5, color:"#64748B", marginBottom:16 } },
       h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed ${sr.pctCompleted}% (${sr.completed})`),
       h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
       h("span", null, h("span", { style:{ color:"#F59E0B", fontWeight:700 } }, "\u25CF "), `Hold ${sr.pctHold}% (${sr.hold})`)
     ),
 
-    h("div", { style:{ marginBottom:18 } },
+    page.isFirst && h("div", { style:{ marginBottom:18 } },
       h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238", marginBottom:8 } }, "Phase Category Report"),
       h("div", { style:{ display:"flex", gap:10 } },
         sr.phaseCategories.map(cat => h("div", {
@@ -3693,43 +3725,44 @@ function StreamSlide({ sr, taskDetails, period }) {
       )
     ),
 
-    h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:16, marginBottom:16 } },
+    page.type === "tasks" && h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:16, marginBottom:16 } },
       h("div", null,
-        h("div", { style:{ fontSize:13, fontWeight:700, color:"#166534", marginBottom:6 } }, `\u2713 Tasks Completed (${allCompleted.length})`),
-        allCompleted.length === 0
-          ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
-          : allCompleted.map(t => taskRow(t, "#166534"))
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#166534", marginBottom:6 } }, `\u2713 Tasks Completed (${totals.completed})`),
+        page.completedChunk.length === 0
+          ? (page.isFirst && h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period."))
+          : page.completedChunk.map(t => taskRow(t, "#166534"))
       ),
       h("div", null,
-        h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E3A5F", marginBottom:6 } }, `\u23F3 Tasks In Progress (${allInProgress.length})`),
-        allInProgress.length === 0
-          ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
-          : allInProgress.map(t => taskRow(t, "#1E3A5F"))
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#1E3A5F", marginBottom:6 } }, `\u23F3 Tasks In Progress (${totals.inProgress})`),
+        page.inProgressChunk.length === 0
+          ? (page.isFirst && h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period."))
+          : page.inProgressChunk.map(t => taskRow(t, "#1E3A5F"))
       ),
       h("div", null,
-        h("div", { style:{ fontSize:13, fontWeight:700, color:"#C2410C", marginBottom:6 } }, `\u26A0 Tasks Delayed (${allDelayedTasks.length})`),
-        allDelayedTasks.length === 0
-          ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period.")
-          : allDelayedTasks.map(t => taskRow(t, "#C2410C"))
+        h("div", { style:{ fontSize:13, fontWeight:700, color:"#C2410C", marginBottom:6 } }, `\u26A0 Tasks Delayed (${totals.delayed})`),
+        page.delayedChunk.length === 0
+          ? (page.isFirst && h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "None in this period."))
+          : page.delayedChunk.map(t => taskRow(t, "#C2410C"))
       )
     ),
 
-    h("div", null,
-      h("div", { style:{ fontSize:13, fontWeight:700, color: allDelayedProjects.length > 0 ? "#C2410C" : "#166534", marginBottom:8 } },
-        allDelayedProjects.length > 0 ? `\u26A0 Delayed Projects (${allDelayedProjects.length})` : "\u2713 No delayed projects"
+    page.type === "delayed-projects" && h("div", null,
+      h("div", { style:{ fontSize:13, fontWeight:700, color: totals.delayedProjects > 0 ? "#C2410C" : "#166534", marginBottom:8 } },
+        totals.delayedProjects > 0 ? `\u26A0 Delayed Projects (${totals.delayedProjects})` : "\u2713 No delayed projects"
       ),
       h("div", { style:{ display:"flex", flexWrap:"wrap", columnGap:40, rowGap:5 } },
-        allDelayedProjects.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", gap:10, width:"calc(50% - 20px)" } },
+        page.delayedProjectsChunk.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", gap:10, width:"calc(50% - 20px)" } },
           h("span", { style:{ flex:1, wordBreak:"break-word" } }, ps.row.project || "\u2014"),
           h("span", { style:{ color:"#C2410C", fontWeight:600, flexShrink:0 } }, ps.riskLabel)
         ))
       ),
-      h("div", { style:{ marginTop:12, fontSize:12.5, fontWeight:700, color:"#EA580C" } },
-        `\u2691 Unlock needed: ${sr.unlockNeededDetails.length} task${sr.unlockNeededDetails.length === 1 ? "" : "s"}`
+      page.showUnlockNeeded && h("div", { style:{ marginTop:12, fontSize:12.5, fontWeight:700, color:"#EA580C" } },
+        `\u2691 Unlock needed: ${totals.unlockNeeded} task${totals.unlockNeeded === 1 ? "" : "s"}`
       )
     ),
 
-    h("div", { style:{ fontSize:11, color:"#CBD5E1", marginTop:12, textAlign:"right" } }, "Paracorp Group \u00B7 Project Tracker")
+    h("div", { style:{ flex:1 } }),
+    h("div", { style:{ fontSize:11, color:"#CBD5E1", textAlign:"right" } }, "Paracorp Group \u00B7 Project Tracker")
   );
 }
 
@@ -4095,48 +4128,44 @@ function DashboardReportView({ projectList, records }) {
     setDownloadModalStream(null);
     if (!sr) return;
     const taskDetails = buildPeriodTaskDetails(sr.projectItems, startDate, endDate, todayISO);
+    const pages = paginateStreamReport(sr, taskDetails);
+    const totals = {
+      completed: taskDetails.completed.length,
+      inProgress: (taskDetails.inProgress || []).length,
+      delayed: taskDetails.delayed.length,
+      delayedProjects: sr.atRisk.length,
+      unlockNeeded: sr.unlockNeededDetails.length
+    };
     setDownloadingStream(sr.streamName);
-    setPendingCapture({ sr, taskDetails, period: { startDate, endDate } });
+    setPendingCapture({ sr, pages, totals, period: { startDate, endDate } });
   };
 
   useEffect(() => {
     if (!pendingCapture) return;
     let cancelled = false;
     (async () => {
-      // Two animation frames so the (just-rendered) hidden slide is fully
-      // painted before html2canvas reads it.
+      // Two animation frames so the (just-rendered) hidden pages are fully
+      // painted before html2canvas reads them.
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       if (cancelled) return;
       const streamName = pendingCapture.sr.streamName;
+      const pages = pendingCapture.pages;
       try {
         if (!window.html2canvas) { showMessage("Image export isn't available right now \u2014 try reloading the page.", "Download failed", "error"); return; }
-        const el = document.getElementById(`slide-${streamName}`);
-        if (!el) return;
-        // Capture at the slide's full natural height (nothing is truncated),
-        // then slice that into 1280x720 "pages" so each downloaded JPG still
-        // looks like one slide \u2014 more pages are generated only if there's
-        // too much content to fit on one.
-        const scale = 2;
-        const canvas = await window.html2canvas(el, { scale, backgroundColor:"#ffffff", width:1280 });
-        const pageHeightPx = 720 * scale;
-        const totalPages = Math.max(1, Math.ceil(canvas.height / pageHeightPx));
         const baseFileName = `${streamName.replace(/[^a-z0-9]+/gi, "_")}_Report_${new Date().toISOString().slice(0,10)}`;
-        for (let i = 0; i < totalPages; i++) {
-          const pageCanvas = document.createElement("canvas");
-          pageCanvas.width = canvas.width;
-          pageCanvas.height = pageHeightPx;
-          const ctx = pageCanvas.getContext("2d");
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-          ctx.drawImage(canvas, 0, i * pageHeightPx, canvas.width, pageHeightPx, 0, 0, canvas.width, pageHeightPx);
-          const dataUrl = pageCanvas.toDataURL("image/jpeg", 0.92);
+        for (let i = 0; i < pages.length; i++) {
+          if (cancelled) return;
+          const el = document.getElementById(`slide-${streamName}-${i}`);
+          if (!el) continue;
+          const canvas = await window.html2canvas(el, { scale:2, backgroundColor:"#ffffff", width:1280, height:720 });
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
           const a = document.createElement("a");
           a.href = dataUrl;
-          a.download = totalPages > 1 ? `${baseFileName}_${i + 1}.jpg` : `${baseFileName}.jpg`;
+          a.download = pages.length > 1 ? `${baseFileName}_${i + 1}.jpg` : `${baseFileName}.jpg`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          if (i < totalPages - 1) await new Promise(r => setTimeout(r, 350));
+          if (i < pages.length - 1) await new Promise(r => setTimeout(r, 350));
         }
       } catch (err) {
         if (!cancelled) showMessage("Something went wrong generating the image. Please try again.", "Download failed", "error");
@@ -4335,7 +4364,9 @@ function DashboardReportView({ projectList, records }) {
       onConfirm: handleConfirmPeriod,
       onCancel: () => setDownloadModalStream(null)
     }),
-    pendingCapture && h(StreamSlide, { sr: pendingCapture.sr, taskDetails: pendingCapture.taskDetails, period: pendingCapture.period })
+    pendingCapture && pendingCapture.pages.map((page, i) => h(StreamSlidePage, {
+      key:i, sr: pendingCapture.sr, page, pageIndex:i, totals: pendingCapture.totals, period: pendingCapture.period
+    }))
   );
 }
 
