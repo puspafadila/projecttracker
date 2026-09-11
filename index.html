@@ -3761,19 +3761,69 @@ function computeProjectStats(projectList, records, todayISO) {
   });
 }
 
+/* Shared helpers used by both the per-stream and per-phase-category
+   breakdowns on Dashboard Report. */
+function phaseLeadingCode(phaseValue) {
+  const m = norm(phaseValue).match(/^(\d+)/);
+  return m ? m[1] : null;
+}
+function isDelayedItem(item, dateField, todayISO) {
+  const d = item[dateField];
+  if (!d || d >= todayISO) return false;
+  const st = norm(item.status).toLowerCase();
+  return st !== "done" && st !== "cancelled";
+}
+const isDoneItem = t => norm(t.status).toLowerCase() === "done";
+
+/* The 5 phase-category buckets requested for Dashboard Report's detail
+   report \u2014 distinct from isCompletedPhase() used elsewhere, since this
+   view specifically wants Phase 5 (Go Live Prep) counted under Completed. */
+const PHASE_CATEGORY_DEFS = [
+  { key:"design", label:"Design", codes:["0","1","2"] },
+  { key:"development", label:"Development", codes:["3","4"] },
+  { key:"completed", label:"Completed", codes:["5","6","60"] },
+  { key:"cancelled", label:"Cancelled", codes:["61"] },
+  { key:"hold", label:"Hold", codes:["62"] },
+];
+function computePhaseCategoryReports(projectStats, todayISO) {
+  return PHASE_CATEGORY_DEFS.map(def => {
+    const items = projectStats.filter(ps => def.codes.includes(phaseLeadingCode(ps.row.phase)));
+    const total = items.length;
+
+    const taskDetails = [];
+    items.forEach(ps => {
+      ps.tasks.forEach(t => taskDetails.push({
+        id:`t-${t.id}`, source:"Project Timeline", task:t.task || "Untitled", pic:t.pic || "\u2014",
+        status:t.status || "\u2014", date:t.endDate, delayed:isDelayedItem(t, "endDate", todayISO),
+        project:ps.row.project || "Untitled", application:ps.row.application || ""
+      }));
+      ps.todos.forEach(t => taskDetails.push({
+        id:`d-${t.id}`, source:"Tasks", task:t.task || "Untitled", pic:t.pic || "\u2014",
+        status:t.status || "\u2014", date:t.dueDate, delayed:isDelayedItem(t, "dueDate", todayISO),
+        project:ps.row.project || "Untitled", application:ps.row.application || ""
+      }));
+    });
+    const totalTaskCount = taskDetails.length;
+    const completedTaskCount = taskDetails.filter(t => norm(t.status).toLowerCase() === "done").length;
+    const delayedTaskDetails = taskDetails.filter(t => t.delayed).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+    return {
+      key: def.key, label: def.label, codes: def.codes,
+      projectCount: total,
+      projects: items.map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", stream: ps.row.stream || "" })),
+      totalTaskCount, completedTaskCount, delayedTaskCount: delayedTaskDetails.length, delayedTaskDetails,
+      pctTaskCompleted: totalTaskCount ? Math.round((completedTaskCount / totalTaskCount) * 100) : 0
+    };
+  });
+}
+
 function computeStreamReports(projectStats, todayISO) {
   const groups = {};
   projectStats.forEach(ps => {
     const s = norm(ps.row.stream) || "(No Stream)";
     (groups[s] = groups[s] || []).push(ps);
   });
-  const phaseCode = ps => { const m = norm(ps.row.phase).match(/^(\d+)/); return m ? m[1] : null; };
-  const isDelayedItem = (item, dateField) => {
-    const d = item[dateField];
-    if (!d || d >= todayISO) return false;
-    const st = norm(item.status).toLowerCase();
-    return st !== "done" && st !== "cancelled";
-  };
+  const phaseCode = ps => phaseLeadingCode(ps.row.phase);
   return Object.entries(groups).map(([streamName, items]) => {
     const total = items.length;
     const completed = items.filter(ps => isCompletedPhase(ps.row.phase)).length;
@@ -3781,14 +3831,13 @@ function computeStreamReports(projectStats, todayISO) {
     const upcoming = items.filter(ps => ["1","2"].includes(phaseCode(ps))).length;
     const exploration = items.filter(ps => phaseCode(ps) === "0").length;
     const pct = n => total ? Math.round((n / total) * 100) : 0;
-    const isDoneItem = t => norm(t.status).toLowerCase() === "done";
     const delayedTaskDetails = [];
     items.forEach(ps => {
-      ps.tasks.filter(t => isDelayedItem(t, "endDate")).forEach(t => delayedTaskDetails.push({
+      ps.tasks.filter(t => isDelayedItem(t, "endDate", todayISO)).forEach(t => delayedTaskDetails.push({
         id:`t-${t.id}`, source:"Project Timeline", task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.endDate,
         project:ps.row.project || "Untitled", application:ps.row.application || ""
       }));
-      ps.todos.filter(t => isDelayedItem(t, "dueDate")).forEach(t => delayedTaskDetails.push({
+      ps.todos.filter(t => isDelayedItem(t, "dueDate", todayISO)).forEach(t => delayedTaskDetails.push({
         id:`d-${t.id}`, source:"Tasks", task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.dueDate,
         project:ps.row.project || "Untitled", application:ps.row.application || ""
       }));
@@ -3809,7 +3858,8 @@ function computeStreamReports(projectStats, todayISO) {
       pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctUpcoming: pct(upcoming), pctExploration: pct(exploration),
       overallPct: pct(completed),
       atRisk: items.filter(ps => ps.riskLabel),
-      delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails
+      delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails,
+      phaseCategories: computePhaseCategoryReports(items, todayISO)
     };
   }).sort((a, b) => a.streamName.localeCompare(b.streamName));
 }
@@ -3821,19 +3871,26 @@ function DashboardReportView({ projectList, records }) {
   const toggleDelayed = streamName => setExpandedDelayed(s => ({ ...s, [streamName]: !s[streamName] }));
 
   const overall = useMemo(() => {
+    const phaseCode = ps => phaseLeadingCode(ps.row.phase);
     const totalProjects = projectStats.length;
-    const completedCount = projectStats.filter(ps => ps.completed).length;
-    const completedPct = totalProjects ? Math.round((completedCount / totalProjects) * 100) : 0;
+    const cancelledCount = projectStats.filter(ps => phaseCode(ps) === "61").length;
+    const activeCount = totalProjects - cancelledCount;
+    const completedCount = projectStats.filter(ps => ["5","6","60"].includes(phaseCode(ps))).length;
+    const inProgressCount = projectStats.filter(ps => ["0","1","2","3","4"].includes(phaseCode(ps))).length;
+    const holdCount = projectStats.filter(ps => phaseCode(ps) === "62").length;
+    const pct = n => activeCount ? Math.round((n / activeCount) * 100) : 0;
     return {
-      totalProjects,
-      pct: completedPct,
-      delayedCount: projectStats.filter(ps => ps.riskLabel).length,
-      completedCount,
-      completedPct
+      totalProjects, activeCount, cancelledCount,
+      completedCount, completedPct: pct(completedCount),
+      inProgressCount, inProgressPct: pct(inProgressCount),
+      holdCount, holdPct: pct(holdCount)
     };
   }, [projectStats]);
 
   const streamReports = useMemo(() => computeStreamReports(projectStats, todayISO), [projectStats, todayISO]);
+  const [expandedCategory, setExpandedCategory] = useState({}); // { [`${stream}::${catKey}`]: "projects" | "delayed" | null }
+  const [expandedPhaseSection, setExpandedPhaseSection] = useState({}); // { [streamName]: boolean }
+  const toggleCategory = (catKey, section) => setExpandedCategory(s => ({ ...s, [catKey]: s[catKey] === section ? null : section }));
 
   return h("div", { style:{ maxWidth:1500, margin:"0 auto", padding:"28px 28px 48px" } },
     h("div", { style:{ marginBottom:20 } },
@@ -3844,10 +3901,12 @@ function DashboardReportView({ projectList, records }) {
     projectStats.length === 0
       ? h("div", { className:"card", style:{ padding:"48px 0", textAlign:"center", color:"#94A3B8", fontSize:13 } }, "No projects yet. Add one via the \"Create Project\" menu.")
       : h("div", null,
-          h("div", { style:{ display:"flex", flexWrap:"wrap", gap:14, marginBottom:20 } },
-            h(StatCard, { label:"Completed Projects", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.totalProjects} projects at Hypercare/Closing/Cancelled Phase` }),
-            h(StatCard, { label:"Total Projects", value:overall.totalProjects }),
-            h(StatCard, { label:"Delayed Projects", value:overall.delayedCount, color: overall.delayedCount > 0 ? "#C2410C" : "#166534", sub: overall.delayedCount > 0 ? "Past End Date, not yet at Phase 6/60/61" : "None right now" })
+          h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(5, minmax(0, 1fr))", gap:14, marginBottom:20 } },
+            h(StatCard, { label:"% Completed", value:`${overall.completedPct}%`, color:"#166534", sub:`${overall.completedCount}/${overall.activeCount} active projects (Phase 5, 6, 60)` }),
+            h(StatCard, { label:"% In Progress", value:`${overall.inProgressPct}%`, color:"#1E3A5F", sub:`${overall.inProgressCount}/${overall.activeCount} active projects (Phase 0\u20134)` }),
+            h(StatCard, { label:"% Hold", value:`${overall.holdPct}%`, color: overall.holdCount > 0 ? "#C2410C" : "#166534", sub:`${overall.holdCount}/${overall.activeCount} active projects (Phase 62)` }),
+            h(StatCard, { label:"Total Active", value:overall.activeCount, sub:`${overall.totalProjects} total \u2212 ${overall.cancelledCount} cancelled` }),
+            h(StatCard, { label:"Total Cancelled", value:overall.cancelledCount, color: overall.cancelledCount > 0 ? "#64748B" : "#166534", sub:"Phase 61" })
           ),
 
           streamReports.map(sr => h("div", { key:sr.streamName, className:"card", style:{ marginBottom:16 } },
@@ -3909,8 +3968,73 @@ function DashboardReportView({ projectList, records }) {
                   h("span", { style:{ color:"#C2410C", fontWeight:600 } }, ps.riskLabel)
                 ))
               )
+            ),
+
+            h("button", {
+              onClick: () => setExpandedPhaseSection(s => ({ ...s, [sr.streamName]: !s[sr.streamName] })),
+              style:{ display:"flex", alignItems:"center", gap:6, width:"100%", background:"none", border:"none", cursor:"pointer",
+                margin:"16px 0 2px", borderTop:"1px solid #F1F5F9", paddingTop:12 }
+            },
+              h(expandedPhaseSection[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } }),
+              h("span", { style:{ fontSize:13, fontWeight:700, color:"#152238" } }, "Phase Category Report")
+            ),
+            expandedPhaseSection[sr.streamName] && h("div", null,
+              h("p", { style:{ fontSize:11.5, color:"#94A3B8", margin:"6px 0 10px" } }, "Projects in this stream grouped by phase, with task-level analysis."),
+              h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))", gap:10 } },
+                sr.phaseCategories.map(cat => {
+                  const catId = `${sr.streamName}::${cat.key}`;
+                  return h("div", { key:cat.key, style:{ border:"1px solid #E2E8F0", borderRadius:9, padding:12 } },
+                    h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:3 } },
+                    h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238" } }, cat.label),
+                    h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `Phase ${cat.codes.join(", ")}`)
+                  ),
+                  h("div", { style:{ fontSize:11.5, color:"#64748B", marginBottom:10 } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
+
+                  h("div", { style:{ height:7, borderRadius:6, background:"#E2E8F0", overflow:"hidden", marginBottom:7 } },
+                    cat.totalTaskCount > 0 && h("div", { style:{ height:"100%", width:`${cat.pctTaskCompleted}%`, background:"#22C55E" } })
+                  ),
+                  h("div", { style:{ fontSize:11.5, color:"#334155", marginBottom:10 } },
+                    `Tasks: ${cat.completedTaskCount}/${cat.totalTaskCount} completed (${cat.pctTaskCompleted}%)`
+                  ),
+
+                  h("div", { style:{ display:"flex", flexDirection:"column", gap:5, borderTop:"1px solid #F1F5F9", paddingTop:8 } },
+                    h("button", {
+                      onClick: () => toggleCategory(catId, "projects"), disabled: cat.projectCount === 0,
+                      style:{ display:"flex", alignItems:"center", gap:4, background:"none", border:"none", padding:0, fontSize:11.5, fontWeight:600, color:"#1E3A5F", cursor: cat.projectCount > 0 ? "pointer" : "default" }
+                    },
+                      `Projects (${cat.projectCount})`,
+                      cat.projectCount > 0 && h(expandedCategory[catId] === "projects" ? Icon.down : Icon.chevronRight, { style:{ flexShrink:0 } })
+                    ),
+                    expandedCategory[catId] === "projects" && h("div", { style:{ display:"flex", flexDirection:"column", gap:3, maxHeight:180, overflow:"auto", paddingLeft:2 } },
+                      cat.projects.length === 0
+                        ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "No projects in this phase.")
+                        : cat.projects.map((p, i) => h("div", { key:i, style:{ fontSize:11.5, color:"#334155" } },
+                            `${p.project}`, h("span", { style:{ color:"#94A3B8" } }, ` (${p.application || "\u2014"})`)
+                          ))
+                    ),
+
+                    h("button", {
+                      onClick: () => toggleCategory(catId, "delayed"), disabled: cat.delayedTaskCount === 0,
+                      style:{ display:"flex", alignItems:"center", gap:4, background:"none", border:"none", padding:0, fontSize:11.5, fontWeight:600,
+                        color: cat.delayedTaskCount > 0 ? "#C2410C" : "#94A3B8", cursor: cat.delayedTaskCount > 0 ? "pointer" : "default" }
+                    },
+                      `Delayed Tasks (${cat.delayedTaskCount})`,
+                      cat.delayedTaskCount > 0 && h(expandedCategory[catId] === "delayed" ? Icon.down : Icon.chevronRight, { style:{ flexShrink:0 } })
+                    ),
+                    expandedCategory[catId] === "delayed" && h("div", {
+                      style:{ display:"flex", flexDirection:"column", gap:5, maxHeight:200, overflow:"auto", background:"#FFFBEB", border:"1px solid #FDE68A", borderRadius:8, padding:8 }
+                    },
+                      cat.delayedTaskDetails.map(d => h("div", { key:d.id, style:{ fontSize:11, color:"#78350F" } },
+                        h("span", { style:{ fontWeight:600 } }, d.task), ` \u2014 ${d.project} \u00B7 ${d.source} \u00B7 PIC: ${d.pic} \u00B7 `,
+                        h("span", { style:{ fontWeight:600 } }, d.date || "No date")
+                      ))
+                    )
+                  )
+                );
+              })
             )
-          ))
+            )
+          )),
         )
   );
 }
