@@ -3635,9 +3635,11 @@ function ProjectBaselineView({
    heights (via TaskListMeasurer, rendered once before the actual capture
    pages), rather than guessing a fixed row count \u2014 guarantees a task row
    is never split across two images, however long its text wraps to.
-   Page 1 carries the stats/progress/phase summary too, so it has less
-   room for rows than a continuation page does. */
-const PAGE1_TASK_BUDGET_PX = 340;
+   Page 1 carries the stats/progress/Phase Category Report too (which can
+   itself grow tall since it now lists every project), so its task budget
+   is computed from the REST of that fixed budget after Phase Category
+   Report's own measured height is subtracted. */
+const PAGE1_COMBINED_BUDGET_PX = 480; // space for (Phase Category Report + tasks) together on page 1
 const CONTINUATION_TASK_BUDGET_PX = 560;
 const DELAYED_PROJECTS_PER_PAGE = 12;
 
@@ -3665,11 +3667,12 @@ const TASK_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 2) / 3;
 /* Rendered once, off-screen, to measure each task row's REAL height
    (text can wrap to multiple lines depending on name length) before
    deciding how many rows actually fit per page. */
-function TaskListMeasurer({ completed, inProgress, delayed, onMeasured }) {
-  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null);
+function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, onMeasured }) {
+  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null), pRef = useRef(null);
   useEffect(() => {
     const measure = ref => ref.current ? Array.from(ref.current.children).map(el => el.getBoundingClientRect().height + 7) : [];
-    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef) });
+    const phaseCategoryHeight = pRef.current ? pRef.current.getBoundingClientRect().height : 0;
+    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseCategoryHeight });
     // eslint-disable-next-line
   }, []);
 
@@ -3681,7 +3684,8 @@ function TaskListMeasurer({ completed, inProgress, delayed, onMeasured }) {
   return h("div", { style:{ position:"fixed", left:-99999, top:0, fontFamily:"Inter, system-ui, sans-serif" } },
     h("div", { ref:cRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, completed.map(taskRow)),
     h("div", { ref:iRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, inProgress.map(taskRow)),
-    h("div", { ref:dRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, delayed.map(taskRow))
+    h("div", { ref:dRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, delayed.map(taskRow)),
+    h("div", { ref:pRef, style:{ width:1280 - 52 * 2 } }, renderPhaseCategoryBoxes(phaseCategories))
   );
 }
 
@@ -3690,9 +3694,10 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
   const delayedProjects = sr.atRisk;
   const pages = [];
 
-  const completedChunks = paginateItemsByHeight(completed, measuredHeights.completed, PAGE1_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
-  const inProgressChunks = paginateItemsByHeight(inProgress, measuredHeights.inProgress, PAGE1_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
-  const delayedChunks = paginateItemsByHeight(delayed, measuredHeights.delayed, PAGE1_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
+  const page1TaskBudget = Math.max(80, PAGE1_COMBINED_BUDGET_PX - (measuredHeights.phaseCategoryHeight || 0) - 26);
+  const completedChunks = paginateItemsByHeight(completed, measuredHeights.completed, page1TaskBudget, CONTINUATION_TASK_BUDGET_PX);
+  const inProgressChunks = paginateItemsByHeight(inProgress, measuredHeights.inProgress, page1TaskBudget, CONTINUATION_TASK_BUDGET_PX);
+  const delayedChunks = paginateItemsByHeight(delayed, measuredHeights.delayed, page1TaskBudget, CONTINUATION_TASK_BUDGET_PX);
   const taskPageCount = Math.max(completedChunks.length, inProgressChunks.length, delayedChunks.length, 1);
   for (let i = 0; i < taskPageCount; i++) {
     pages.push({
@@ -3716,7 +3721,28 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
   return pages;
 }
 
-function StreamSlidePage({ sr, page, pageIndex, totals, period }) {
+/* Shared between the actual slide page and the off-screen measurer, so
+   both render identical markup (needed for the measured height to be
+   accurate). */
+function renderPhaseCategoryBoxes(phaseCategories) {
+  return h("div", { style:{ display:"flex", gap:10, alignItems:"flex-start" } },
+    phaseCategories.map(cat => h("div", {
+      key:cat.key, style:{ flex:1, background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px" }
+    },
+      h("div", { style:{ fontSize:12, fontWeight:700, color:"#334155", marginBottom:2 } }, cat.label),
+      h("div", { style:{ fontSize:11, color:"#64748B", marginBottom:5 } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
+      h("div", { style:{ display:"flex", flexDirection:"column", gap:2 } },
+        cat.projects.length === 0
+          ? h("div", { style:{ fontSize:10, color:"#CBD5E1" } }, "\u2014")
+          : cat.projects.map((p, i) => h("div", { key:i, style:{ fontSize:10, color:"#475569", wordBreak:"break-word", lineHeight:1.4 } },
+              `${p.application} - ${p.project} - ${p.weekLabel} - ${p.progressPct}%`
+            ))
+      )
+    ))
+  );
+}
+
+function StreamSlidePage({ sr, page, pageIndex, totalPages, totals, period }) {
   const generatedOn = new Date().toLocaleDateString("en-US", { day:"2-digit", month:"short", year:"numeric" });
   const fmtShort = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { day:"2-digit", month:"short" }) : "";
   const periodLabel = period ? `Period: ${fmtShort(period.startDate)} \u2013 ${period.endDate ? fmtShort(period.endDate) : "present"}` : "";
@@ -3762,15 +3788,7 @@ function StreamSlidePage({ sr, page, pageIndex, totals, period }) {
 
     page.isFirst && h("div", { style:{ marginBottom:18 } },
       h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238", marginBottom:8 } }, "Phase Category Report"),
-      h("div", { style:{ display:"flex", gap:10 } },
-        sr.phaseCategories.map(cat => h("div", {
-          key:cat.key, style:{ flex:1, background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px" }
-        },
-          h("div", { style:{ fontSize:12, fontWeight:700, color:"#334155", marginBottom:2 } }, cat.label),
-          h("div", { style:{ fontSize:11, color:"#64748B" } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
-          h("div", { style:{ fontSize:11, color:"#166534", fontWeight:600 } }, `${cat.pctTaskCompleted}% tasks done`)
-        ))
-      )
+      renderPhaseCategoryBoxes(sr.phaseCategories)
     ),
 
     page.type === "tasks" && h("div", { style:{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:16, marginBottom:16 } },
@@ -3810,7 +3828,10 @@ function StreamSlidePage({ sr, page, pageIndex, totals, period }) {
     ),
 
     h("div", { style:{ flex:1 } }),
-    h("div", { style:{ fontSize:11, color:"#CBD5E1", textAlign:"right" } }, "Paracorp Group \u00B7 Project Tracker")
+    h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
+      h("div", { style:{ fontSize:11, color:"#94A3B8", fontWeight:600 } }, `Page ${pageIndex + 1} of ${totalPages}`),
+      h("div", { style:{ fontSize:11, color:"#CBD5E1" } }, "Paracorp Group \u00B7 Project Tracker")
+    )
   );
 }
 
@@ -4072,7 +4093,14 @@ function computePhaseCategoryReports(projectStats, todayISO) {
     return {
       key: def.key, label: def.label, codes: def.codes,
       projectCount: total,
-      projects: items.map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", stream: ps.row.stream || "" })),
+      projects: items.map(ps => {
+        const progress = computeTimelineProgress(ps.tasks, ps.todos);
+        const week = isoWeekOf(ps.row.goLivePlan);
+        return {
+          project: ps.row.project || "Untitled", application: ps.row.application || "", stream: ps.row.stream || "",
+          weekLabel: week ? `W${week}` : "\u2014", progressPct: progress.pct
+        };
+      }),
       totalTaskCount, completedTaskCount, delayedTaskCount: delayedTaskDetails.length, delayedTaskDetails,
       pctTaskCompleted: totalTaskCount ? Math.round((completedTaskCount / totalTaskCount) * 100) : 0
     };
@@ -4424,10 +4452,11 @@ function DashboardReportView({ projectList, records }) {
       completed: pendingMeasurement.taskDetails.completed,
       inProgress: pendingMeasurement.taskDetails.inProgress || [],
       delayed: pendingMeasurement.taskDetails.delayed,
+      phaseCategories: pendingMeasurement.sr.phaseCategories,
       onMeasured: handleTaskListsMeasured
     }),
     pendingCapture && pendingCapture.pages.map((page, i) => h(StreamSlidePage, {
-      key:i, sr: pendingCapture.sr, page, pageIndex:i, totals: pendingCapture.totals, period: pendingCapture.period
+      key:i, sr: pendingCapture.sr, page, pageIndex:i, totalPages: pendingCapture.pages.length, totals: pendingCapture.totals, period: pendingCapture.period
     }))
   );
 }
