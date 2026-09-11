@@ -3631,29 +3631,77 @@ function ProjectBaselineView({
    a stream's report (captured via html2canvas, never shown on screen).
    taskDetails ({ completed, delayed }) is computed for a chosen date
    period (Start Date required, End Date optional) right before capture. */
-/* Splits a stream's full task/delayed-project lists into "pages" that each
-   fit one 1280x720 slide without ever splitting a single row across two
-   images. Page 1 carries the stats/progress/phase summary too, so it has
-   less room for rows than a continuation page does. */
-const TASK_ROWS_PAGE1 = 4;
-const TASK_ROWS_CONTINUATION = 13;
-const DELAYED_PROJECTS_PER_PAGE = 16;
-function paginateStreamReport(sr, taskDetails) {
+/* Splits a stream's task lists into "pages" using REAL measured row
+   heights (via TaskListMeasurer, rendered once before the actual capture
+   pages), rather than guessing a fixed row count \u2014 guarantees a task row
+   is never split across two images, however long its text wraps to.
+   Page 1 carries the stats/progress/phase summary too, so it has less
+   room for rows than a continuation page does. */
+const PAGE1_TASK_BUDGET_PX = 340;
+const CONTINUATION_TASK_BUDGET_PX = 560;
+const DELAYED_PROJECTS_PER_PAGE = 12;
+
+function paginateItemsByHeight(items, heights, firstBudget, continuationBudget) {
+  const chunks = [];
+  let idx = 0, pageNum = 0;
+  do {
+    const budget = pageNum === 0 ? firstBudget : continuationBudget;
+    const start = idx;
+    let used = 0;
+    while (idx < items.length) {
+      const h = (heights && heights[idx] !== undefined) ? heights[idx] : 26;
+      if (used + h > budget && idx > start) break;
+      used += h;
+      idx++;
+    }
+    chunks.push(items.slice(start, idx));
+    pageNum++;
+  } while (idx < items.length);
+  return chunks;
+}
+
+const TASK_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 2) / 3;
+
+/* Rendered once, off-screen, to measure each task row's REAL height
+   (text can wrap to multiple lines depending on name length) before
+   deciding how many rows actually fit per page. */
+function TaskListMeasurer({ completed, inProgress, delayed, onMeasured }) {
+  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null);
+  useEffect(() => {
+    const measure = ref => ref.current ? Array.from(ref.current.children).map(el => el.getBoundingClientRect().height + 7) : [];
+    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef) });
+    // eslint-disable-next-line
+  }, []);
+
+  const taskRow = t => h("div", { key:t.id, style:{ fontSize:11, lineHeight:1.35, wordBreak:"break-word" } },
+    h("span", { style:{ color:"#152238", fontWeight:700 } }, t.application || "\u2014"),
+    h("span", { style:{ color:"#94A3B8" } }, ` - ${t.project} - ${t.task} - ${t.pic} - ${t.date || "\u2014"}`)
+  );
+
+  return h("div", { style:{ position:"fixed", left:-99999, top:0, fontFamily:"Inter, system-ui, sans-serif" } },
+    h("div", { ref:cRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, completed.map(taskRow)),
+    h("div", { ref:iRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, inProgress.map(taskRow)),
+    h("div", { ref:dRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, delayed.map(taskRow))
+  );
+}
+
+function paginateStreamReport(sr, taskDetails, measuredHeights) {
   const completed = taskDetails.completed, inProgress = taskDetails.inProgress || [], delayed = taskDetails.delayed;
   const delayedProjects = sr.atRisk;
   const pages = [];
 
-  let ci = 0, ii = 0, di = 0, taskPageNum = 0;
-  do {
-    const budget = taskPageNum === 0 ? TASK_ROWS_PAGE1 : TASK_ROWS_CONTINUATION;
+  const completedChunks = paginateItemsByHeight(completed, measuredHeights.completed, PAGE1_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
+  const inProgressChunks = paginateItemsByHeight(inProgress, measuredHeights.inProgress, PAGE1_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
+  const delayedChunks = paginateItemsByHeight(delayed, measuredHeights.delayed, PAGE1_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
+  const taskPageCount = Math.max(completedChunks.length, inProgressChunks.length, delayedChunks.length, 1);
+  for (let i = 0; i < taskPageCount; i++) {
     pages.push({
-      type:"tasks", isFirst: taskPageNum === 0,
-      completedChunk: completed.slice(ci, ci + budget),
-      inProgressChunk: inProgress.slice(ii, ii + budget),
-      delayedChunk: delayed.slice(di, di + budget)
+      type:"tasks", isFirst: i === 0,
+      completedChunk: completedChunks[i] || [],
+      inProgressChunk: inProgressChunks[i] || [],
+      delayedChunk: delayedChunks[i] || []
     });
-    ci += budget; ii += budget; di += budget; taskPageNum++;
-  } while (ci < completed.length || ii < inProgress.length || di < delayed.length);
+  }
 
   let pi = 0, isFirstDpPage = true;
   do {
@@ -4121,14 +4169,22 @@ function DashboardReportView({ projectList, records }) {
   const [expandedUnlock, setExpandedUnlock] = useState({}); // { [streamName]: boolean }
   const [downloadingStream, setDownloadingStream] = useState(null);
   const [downloadModalStream, setDownloadModalStream] = useState(null);
-  const [pendingCapture, setPendingCapture] = useState(null); // { sr, taskDetails, period }
+  const [pendingMeasurement, setPendingMeasurement] = useState(null); // { sr, taskDetails, period } \u2014 waiting on TaskListMeasurer
+  const [pendingCapture, setPendingCapture] = useState(null); // { sr, pages, totals, period } \u2014 ready to render+capture
 
   const handleConfirmPeriod = (startDate, endDate) => {
     const sr = streamReports.find(s => s.streamName === downloadModalStream);
     setDownloadModalStream(null);
     if (!sr) return;
     const taskDetails = buildPeriodTaskDetails(sr.projectItems, startDate, endDate, todayISO);
-    const pages = paginateStreamReport(sr, taskDetails);
+    setDownloadingStream(sr.streamName);
+    setPendingMeasurement({ sr, taskDetails, period: { startDate, endDate } });
+  };
+
+  const handleTaskListsMeasured = heights => {
+    if (!pendingMeasurement) return;
+    const { sr, taskDetails, period } = pendingMeasurement;
+    const pages = paginateStreamReport(sr, taskDetails, heights);
     const totals = {
       completed: taskDetails.completed.length,
       inProgress: (taskDetails.inProgress || []).length,
@@ -4136,8 +4192,8 @@ function DashboardReportView({ projectList, records }) {
       delayedProjects: sr.atRisk.length,
       unlockNeeded: sr.unlockNeededDetails.length
     };
-    setDownloadingStream(sr.streamName);
-    setPendingCapture({ sr, pages, totals, period: { startDate, endDate } });
+    setPendingMeasurement(null);
+    setPendingCapture({ sr, pages, totals, period });
   };
 
   useEffect(() => {
@@ -4363,6 +4419,12 @@ function DashboardReportView({ projectList, records }) {
       open: downloadModalStream !== null,
       onConfirm: handleConfirmPeriod,
       onCancel: () => setDownloadModalStream(null)
+    }),
+    pendingMeasurement && h(TaskListMeasurer, {
+      completed: pendingMeasurement.taskDetails.completed,
+      inProgress: pendingMeasurement.taskDetails.inProgress || [],
+      delayed: pendingMeasurement.taskDetails.delayed,
+      onMeasured: handleTaskListsMeasured
     }),
     pendingCapture && pendingCapture.pages.map((page, i) => h(StreamSlidePage, {
       key:i, sr: pendingCapture.sr, page, pageIndex:i, totals: pendingCapture.totals, period: pendingCapture.period
