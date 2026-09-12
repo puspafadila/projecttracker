@@ -3666,14 +3666,17 @@ const TASK_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 2) / 3;
    deciding how many rows actually fit per page. */
 const PHASE_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 4) / 5;
 
-function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, activeCount, onMeasured }) {
-  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null);
+function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, delayedProjects, unlockNeeded, activeCount, onMeasured }) {
+  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null), dpRef = useRef(null), unRef = useRef(null);
   const phaseRefs = useRef({});
   useEffect(() => {
     const measure = ref => ref.current ? Array.from(ref.current.children).map(el => el.getBoundingClientRect().height + 7) : [];
     const phaseProjectHeights = {};
     phaseCategories.forEach(cat => { phaseProjectHeights[cat.key] = measure(phaseRefs.current[cat.key] || { current:null }); });
-    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseProjectHeights });
+    onMeasured({
+      completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseProjectHeights,
+      delayedProjects: measure(dpRef), unlockNeeded: measure(unRef)
+    });
     // eslint-disable-next-line
   }, []);
 
@@ -3688,13 +3691,16 @@ function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, act
     h("div", { ref:dRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, delayed.map(taskRow)),
     phaseCategories.map(cat => h("div", {
       key:cat.key, ref: el => { phaseRefs.current[cat.key] = { current: el }; }, style:{ width:PHASE_COLUMN_WIDTH_PX }
-    }, cat.projects.map((p, i) => phaseProjectRow(cat, p, i))))
+    }, cat.projects.map((p, i) => phaseProjectRow(cat, p, i)))),
+    h("div", { ref:dpRef, style:{ width:1280 - 52 * 2 } }, delayedProjects.map(ps => delayedProjectRow(ps))),
+    h("div", { ref:unRef, style:{ width:1280 - 52 * 2 } }, unlockNeeded.map(u => unlockNeededRow(u)))
   );
 }
 
 function paginateStreamReport(sr, taskDetails, measuredHeights) {
   const completed = taskDetails.completed, inProgress = taskDetails.inProgress || [], delayed = taskDetails.delayed;
   const delayedProjects = sr.atRisk;
+  const unlockNeeded = sr.unlockNeededDetails;
   const pages = [];
 
   // Phase Category Report project-list pages come first (page 1 carries
@@ -3731,26 +3737,38 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
     });
   }
 
-  // Delayed Projects, then Unlock Needed, come right after the header
-  // page; Tasks Completed/In Progress/Delayed come last.
-  let pi = 0;
-  do {
+  // Delayed Projects, then Unlock Needed, are combined onto the same
+  // page(s) right after the header page (only spilling onto more pages if
+  // there genuinely isn't room for everything), using the same real
+  // measured-height approach as the task columns.
+  const dpChunks = [];
+  const unChunks = [];
+  {
+    let dpIdx = 0, unIdx = 0;
+    do {
+      let used = 0;
+      const dpChunk = [];
+      while (dpIdx < delayedProjects.length) {
+        const rowH = (measuredHeights.delayedProjects && measuredHeights.delayedProjects[dpIdx] !== undefined) ? measuredHeights.delayedProjects[dpIdx] : 26;
+        if (used + rowH > CONTINUATION_TASK_BUDGET_PX && dpChunk.length > 0) break;
+        used += rowH; dpChunk.push(delayedProjects[dpIdx]); dpIdx++;
+      }
+      const unChunk = [];
+      while (unIdx < unlockNeeded.length) {
+        const rowH = (measuredHeights.unlockNeeded && measuredHeights.unlockNeeded[unIdx] !== undefined) ? measuredHeights.unlockNeeded[unIdx] : 26;
+        if (used + rowH > CONTINUATION_TASK_BUDGET_PX && (dpChunk.length > 0 || unChunk.length > 0)) break;
+        used += rowH; unChunk.push(unlockNeeded[unIdx]); unIdx++;
+      }
+      dpChunks.push(dpChunk);
+      unChunks.push(unChunk);
+    } while (dpIdx < delayedProjects.length || unIdx < unlockNeeded.length);
+  }
+  for (let i = 0; i < dpChunks.length; i++) {
     pages.push({
-      type:"delayed-projects", isFirst:false,
-      delayedProjectsChunk: delayedProjects.slice(pi, pi + DELAYED_PROJECTS_PER_PAGE)
+      type:"delayed-and-unlock", isFirst:false,
+      delayedProjectsChunk: dpChunks[i], unlockNeededChunk: unChunks[i]
     });
-    pi += DELAYED_PROJECTS_PER_PAGE;
-  } while (pi < delayedProjects.length);
-
-  const unlockNeeded = sr.unlockNeededDetails;
-  let ui = 0;
-  do {
-    pages.push({
-      type:"unlock-needed", isFirst:false,
-      unlockNeededChunk: unlockNeeded.slice(ui, ui + DELAYED_PROJECTS_PER_PAGE)
-    });
-    ui += DELAYED_PROJECTS_PER_PAGE;
-  } while (ui < unlockNeeded.length);
+  }
 
   pages.push(...taskPages);
 
@@ -3775,12 +3793,27 @@ function renderPhaseCategoryBoxes(phaseCategories, activeCount) {
 }
 
 const PHASE_PROJECT_COLORS = { design:"#4F9D9D", development:"#1E3A5F", completed:"#166534", cancelled:"#64748B", hold:"#EA580C" };
+/* Matches the 4-segment stream progress bar's colors exactly (Cancelled
+   isn't part of that bar, so it has no entry here). */
+const PHASE_BAR_COLORS = { completed:"#22C55E", design:"#4F9D9D", development:"#1E3A5F", hold:"#F59E0B" };
 /* Row format matches the Tasks Completed/In Progress/Delayed columns:
    bold dark Application, then gray detail text. */
 function phaseProjectRow(cat, p, i) {
   return h("div", { key:i, style:{ fontSize:11, marginBottom:7, lineHeight:1.35, wordBreak:"break-word" } },
     h("span", { style:{ color:"#152238", fontWeight:700 } }, p.application),
     h("span", { style:{ color:"#94A3B8" } }, cat.key === "development" ? ` - ${p.project} - ${p.weekLabel} - ${p.progressPct}%` : ` - ${p.project}`)
+  );
+}
+function delayedProjectRow(ps) {
+  return h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", justifyContent:"space-between", gap:10, marginBottom:7 } },
+    h("span", { style:{ wordBreak:"break-word" } }, `${ps.row.project || "\u2014"} `, h("span", { style:{ color:"#94A3B8" } }, `(${ps.row.application || "\u2014"})`)),
+    h("span", { style:{ color:"#C2410C", fontWeight:600, flexShrink:0 } }, ps.riskLabel)
+  );
+}
+function unlockNeededRow(u) {
+  return h("div", { key:u.id, style:{ fontSize:11, marginBottom:7, lineHeight:1.35, wordBreak:"break-word" } },
+    h("span", { style:{ color:"#152238", fontWeight:700 } }, u.application || "\u2014"),
+    h("span", { style:{ color:"#94A3B8" } }, ` - ${u.project} - ${u.task} - ${u.pic} - ${u.status || "\u2014"} - ${u.date || "\u2014"}`)
   );
 }
 /* Shared between the actual slide page and the off-screen measurer. */
@@ -3875,30 +3908,19 @@ function StreamSlidePage({ sr, page, pageIndex, totalPages, totals, period }) {
       )
     ),
 
-    page.type === "delayed-projects" && h("div", null,
+    page.type === "delayed-and-unlock" && h("div", null,
       h("div", { style:{ fontSize:13, fontWeight:700, color: totals.delayedProjects > 0 ? "#C2410C" : "#166534", marginBottom:8 } },
         totals.delayedProjects > 0 ? `\u26A0 Delayed Projects (${totals.delayedProjects})` : "\u2713 No delayed projects"
       ),
-      h("div", { style:{ display:"flex", flexWrap:"wrap", columnGap:40, rowGap:5 } },
-        page.delayedProjectsChunk.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", gap:10, width:"calc(50% - 20px)" } },
-          h("span", { style:{ flex:1, wordBreak:"break-word" } }, ps.row.project || "\u2014"),
-          h("span", { style:{ color:"#C2410C", fontWeight:600, flexShrink:0 } }, ps.riskLabel)
-        ))
-      )
-    ),
-
-    page.type === "unlock-needed" && h("div", null,
+      page.delayedProjectsChunk.length > 0 && h("div", { style:{ marginBottom:16 } },
+        page.delayedProjectsChunk.map(ps => delayedProjectRow(ps))
+      ),
       h("div", { style:{ fontSize:13, fontWeight:700, color:"#EA580C", marginBottom:8 } },
         `\u2691 Unlock Needed (${totals.unlockNeeded})`
       ),
       page.unlockNeededChunk.length === 0
         ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "No tasks currently flagged.")
-        : h("div", { style:{ display:"flex", flexDirection:"column", gap:7 } },
-            page.unlockNeededChunk.map(u => h("div", { key:u.id, style:{ fontSize:11, lineHeight:1.35, wordBreak:"break-word" } },
-              h("span", { style:{ color:"#152238", fontWeight:700 } }, u.application || "\u2014"),
-              h("span", { style:{ color:"#94A3B8" } }, ` - ${u.project} - ${u.task} - ${u.pic} - ${u.status || "\u2014"} - ${u.date || "\u2014"}`)
-            ))
-          )
+        : h("div", null, page.unlockNeededChunk.map(u => unlockNeededRow(u)))
     ),
 
     h("div", { style:{ flex:1 } }),
@@ -4440,7 +4462,10 @@ function DashboardReportView({ projectList, records }) {
                   const catId = `${sr.streamName}::${cat.key}`;
                   return h("div", { key:cat.key, style:{ border:"1px solid #E2E8F0", borderRadius:9, padding:12 } },
                     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:3 } },
-                    h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238" } }, cat.label),
+                    h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238", display:"flex", alignItems:"center", gap:6 } },
+                      PHASE_BAR_COLORS[cat.key] && h("span", { style:{ width:9, height:9, borderRadius:"50%", background:PHASE_BAR_COLORS[cat.key], display:"inline-block", flexShrink:0 } }),
+                      cat.label
+                    ),
                     h("div", { style:{ textAlign:"right" } },
                       h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `Phase ${cat.codes.join(", ")}`),
                       cat.key !== "cancelled" && h("div", { style:{ fontSize:11, color:"#1E3A5F", fontWeight:700 } },
@@ -4556,6 +4581,8 @@ function DashboardReportView({ projectList, records }) {
       inProgress: pendingMeasurement.taskDetails.inProgress || [],
       delayed: pendingMeasurement.taskDetails.delayed,
       phaseCategories: pendingMeasurement.sr.phaseCategories,
+      delayedProjects: pendingMeasurement.sr.atRisk,
+      unlockNeeded: pendingMeasurement.sr.unlockNeededDetails,
       activeCount: pendingMeasurement.sr.active,
       onMeasured: handleTaskListsMeasured
     }),
