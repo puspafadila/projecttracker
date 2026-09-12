@@ -3636,7 +3636,7 @@ function ProjectBaselineView({
    itself grow tall since it now lists every project), so its task budget
    is computed from the REST of that fixed budget after Phase Category
    Report's own measured height is subtracted. */
-const PAGE1_COMBINED_BUDGET_PX = 480; // space for (Phase Category Report + tasks) together on page 1
+const PAGE1_PHASE_PROJECTS_BUDGET_PX = 480; // space for the Phase Category Report project columns on page 1, now that the summary boxes above them are gone
 const CONTINUATION_TASK_BUDGET_PX = 560;
 const DELAYED_PROJECTS_PER_PAGE = 12;
 
@@ -3666,15 +3666,14 @@ const TASK_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 2) / 3;
    deciding how many rows actually fit per page. */
 const PHASE_COLUMN_WIDTH_PX = (1280 - 52 * 2 - 16 * 4) / 5;
 
-function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, onMeasured }) {
-  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null), pRef = useRef(null);
+function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, activeCount, onMeasured }) {
+  const cRef = useRef(null), iRef = useRef(null), dRef = useRef(null);
   const phaseRefs = useRef({});
   useEffect(() => {
     const measure = ref => ref.current ? Array.from(ref.current.children).map(el => el.getBoundingClientRect().height + 7) : [];
-    const phaseCategoryHeight = pRef.current ? pRef.current.getBoundingClientRect().height : 0;
     const phaseProjectHeights = {};
     phaseCategories.forEach(cat => { phaseProjectHeights[cat.key] = measure(phaseRefs.current[cat.key] || { current:null }); });
-    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseCategoryHeight, phaseProjectHeights });
+    onMeasured({ completed: measure(cRef), inProgress: measure(iRef), delayed: measure(dRef), phaseProjectHeights });
     // eslint-disable-next-line
   }, []);
 
@@ -3687,7 +3686,6 @@ function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, onM
     h("div", { ref:cRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, completed.map(taskRow)),
     h("div", { ref:iRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, inProgress.map(taskRow)),
     h("div", { ref:dRef, style:{ width:TASK_COLUMN_WIDTH_PX } }, delayed.map(taskRow)),
-    h("div", { ref:pRef, style:{ width:1280 - 52 * 2 } }, renderPhaseCategoryBoxes(phaseCategories)),
     phaseCategories.map(cat => h("div", {
       key:cat.key, ref: el => { phaseRefs.current[cat.key] = { current: el }; }, style:{ width:PHASE_COLUMN_WIDTH_PX }
     }, cat.projects.map((p, i) => phaseProjectRow(cat, p, i))))
@@ -3702,7 +3700,7 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
   // Phase Category Report project-list pages come first (page 1 carries
   // the stats/progress/phase boxes too, so its budget is whatever's left
   // after those measured sections).
-  const page1Budget = Math.max(80, PAGE1_COMBINED_BUDGET_PX - (measuredHeights.phaseCategoryHeight || 0) - 26);
+  const page1Budget = PAGE1_PHASE_PROJECTS_BUDGET_PX;
   const chunksByCatPage = {};
   let maxPhasePages = 1;
   sr.phaseCategories.forEach(cat => {
@@ -3736,11 +3734,20 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
   do {
     pages.push({
       type:"delayed-projects", isFirst:false,
-      delayedProjectsChunk: delayedProjects.slice(pi, pi + DELAYED_PROJECTS_PER_PAGE),
-      showUnlockNeeded: isFirstDpPage
+      delayedProjectsChunk: delayedProjects.slice(pi, pi + DELAYED_PROJECTS_PER_PAGE)
     });
     pi += DELAYED_PROJECTS_PER_PAGE; isFirstDpPage = false;
   } while (pi < delayedProjects.length);
+
+  const unlockNeeded = sr.unlockNeededDetails;
+  let ui = 0;
+  do {
+    pages.push({
+      type:"unlock-needed", isFirst:false,
+      unlockNeededChunk: unlockNeeded.slice(ui, ui + DELAYED_PROJECTS_PER_PAGE)
+    });
+    ui += DELAYED_PROJECTS_PER_PAGE;
+  } while (ui < unlockNeeded.length);
 
   return pages;
 }
@@ -3748,13 +3755,16 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
 /* Shared between the actual slide page and the off-screen measurer, so
    both render identical markup (needed for the measured height to be
    accurate). */
-function renderPhaseCategoryBoxes(phaseCategories) {
+function renderPhaseCategoryBoxes(phaseCategories, activeCount) {
   return h("div", { style:{ display:"flex", gap:10 } },
     phaseCategories.map(cat => h("div", {
       key:cat.key, style:{ flex:1, background:"#F8FAFC", border:"1px solid #E2E8F0", borderRadius:8, padding:"8px 10px" }
     },
       h("div", { style:{ fontSize:12, fontWeight:700, color:"#334155", marginBottom:2 } }, cat.label),
-      h("div", { style:{ fontSize:11, color:"#64748B" } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`)
+      h("div", { style:{ fontSize:11, color:"#64748B" } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
+      cat.key !== "cancelled" && h("div", { style:{ fontSize:11, color:"#1E3A5F", fontWeight:700 } },
+        `${activeCount ? Math.round((cat.projectCount / activeCount) * 100) : 0}%`
+      )
     ))
   );
 }
@@ -3816,20 +3826,23 @@ function StreamSlidePage({ sr, page, pageIndex, totalPages, totals, period }) {
       )
     ),
 
-    page.isFirst && h("div", { style:{ height:10, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:8 } },
-      sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
-      sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
-      sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctHold}%`, background:"#F59E0B" } })
+    page.isFirst && h("div", { style:{ display:"flex", gap:18, flexWrap:"wrap", fontSize:11.5, color:"#64748B", marginBottom:8 } },
+      sr.priorityBreakdown.map(pb => h("span", { key:pb.priority },
+        h("span", { style:{ color: PRIORITY_FG[pb.priority], fontWeight:700 } }, "\u25CF "), `${pb.priority} ${pb.pct}% (${pb.count})`
+      ))
     ),
-    page.isFirst && h("div", { style:{ display:"flex", gap:18, fontSize:11.5, color:"#64748B", marginBottom:16 } },
-      h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed ${sr.pctCompleted}% (${sr.completed})`),
-      h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
-      h("span", null, h("span", { style:{ color:"#F59E0B", fontWeight:700 } }, "\u25CF "), `Hold ${sr.pctHold}% (${sr.hold})`)
-    ),
-
-    page.isFirst && h("div", { style:{ marginBottom:18 } },
-      h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238", marginBottom:8 } }, "Phase Category Report"),
-      renderPhaseCategoryBoxes(sr.phaseCategories)
+    page.isFirst && h("div", { style:{ height:26, borderRadius:8, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:18 } },
+      [
+        { label:"Completed", pct:sr.pctCompleted, color:"#22C55E" },
+        { label:"Design", pct:sr.pctDesign, color:"#4F9D9D" },
+        { label:"Development", pct:sr.pctDevelopment, color:"#1E3A5F" },
+        { label:"Hold", pct:sr.pctHold, color:"#F59E0B" }
+      ].map(seg => sr.active > 0 && seg.pct > 0 && h("div", {
+        key:seg.label,
+        style:{ height:"100%", width:`${seg.pct}%`, background:seg.color, display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }
+      },
+        h("span", { style:{ fontSize:10.5, fontWeight:700, color:"#fff", whiteSpace:"nowrap" } }, `${seg.label} ${seg.pct}%`)
+      ))
     ),
 
     page.type === "phase-projects" && h("div", { style:{ marginBottom:16 } },
@@ -3866,10 +3879,21 @@ function StreamSlidePage({ sr, page, pageIndex, totalPages, totals, period }) {
           h("span", { style:{ flex:1, wordBreak:"break-word" } }, ps.row.project || "\u2014"),
           h("span", { style:{ color:"#C2410C", fontWeight:600, flexShrink:0 } }, ps.riskLabel)
         ))
-      ),
-      page.showUnlockNeeded && h("div", { style:{ marginTop:12, fontSize:12.5, fontWeight:700, color:"#EA580C" } },
-        `\u2691 Unlock needed: ${totals.unlockNeeded} task${totals.unlockNeeded === 1 ? "" : "s"}`
       )
+    ),
+
+    page.type === "unlock-needed" && h("div", null,
+      h("div", { style:{ fontSize:13, fontWeight:700, color:"#EA580C", marginBottom:8 } },
+        `\u2691 Unlock Needed (${totals.unlockNeeded})`
+      ),
+      page.unlockNeededChunk.length === 0
+        ? h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, "No tasks currently flagged.")
+        : h("div", { style:{ display:"flex", flexDirection:"column", gap:7 } },
+            page.unlockNeededChunk.map(u => h("div", { key:u.id, style:{ fontSize:11, lineHeight:1.35, wordBreak:"break-word" } },
+              h("span", { style:{ color:"#152238", fontWeight:700 } }, u.application || "\u2014"),
+              h("span", { style:{ color:"#94A3B8" } }, ` - ${u.project} - ${u.task} - ${u.pic} - ${u.status || "\u2014"} - ${u.date || "\u2014"}`)
+            ))
+          )
     ),
 
     h("div", { style:{ flex:1 } }),
@@ -4074,11 +4098,11 @@ const isDoneItem = t => norm(t.status).toLowerCase() === "done";
    report \u2014 distinct from isCompletedPhase() used elsewhere, since this
    view specifically wants Phase 5 (Go Live Prep) counted under Completed. */
 const PHASE_CATEGORY_DEFS = [
+  { key:"completed", label:"Completed", codes:["6","60"] },
   { key:"design", label:"Design", codes:["0","1","2"] },
   { key:"development", label:"Development", codes:["3","4","5"] },
-  { key:"completed", label:"Completed", codes:["6","60"] },
-  { key:"cancelled", label:"Cancelled", codes:["61"] },
   { key:"hold", label:"Hold", codes:["62"] },
+  { key:"cancelled", label:"Cancelled", codes:["61"] },
 ];
 /* For the JPG report: pulls task/to-do details (from Project Timeline +
    Tasks) whose date falls within [startDate, endDate] (endDate optional
@@ -4165,8 +4189,14 @@ function computeStreamReports(projectStats, todayISO) {
     const active = total - cancelled;
     const completed = items.filter(ps => ["6","60"].includes(phaseCode(ps))).length;
     const inProgress = items.filter(ps => ["0","1","2","3","4","5"].includes(phaseCode(ps))).length;
+    const design = items.filter(ps => ["0","1","2"].includes(phaseCode(ps))).length;
+    const development = items.filter(ps => ["3","4","5"].includes(phaseCode(ps))).length;
     const hold = items.filter(ps => phaseCode(ps) === "62").length;
     const pct = n => active ? Math.round((n / active) * 100) : 0;
+    const priorityBreakdown = PRIORITY_OPTS.map(p => {
+      const count = items.filter(ps => norm(ps.row.priority) === p && phaseCode(ps) !== "61").length;
+      return { priority: p, count, pct: pct(count) };
+    });
     const delayedTaskDetails = [];
     items.forEach(ps => {
       ps.tasks.filter(t => isDelayedItem(t, "endDate", todayISO)).forEach(t => delayedTaskDetails.push({
@@ -4198,13 +4228,13 @@ function computeStreamReports(projectStats, todayISO) {
       .map(ps => ({ project: ps.row.project || "Untitled", application: ps.row.application || "", priority: ps.row.priority }));
     return {
       streamName, projectCount: total, total, active, cancelled,
-      completed, inProgress, hold,
-      pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctHold: pct(hold),
+      completed, inProgress, design, development, hold,
+      pctCompleted: pct(completed), pctInProgress: pct(inProgress), pctDesign: pct(design), pctDevelopment: pct(development), pctHold: pct(hold),
       overallPct: pct(completed),
       atRisk: items.filter(ps => ps.riskLabel),
       delayedTaskCount, completedTaskCount, priorityRiskProjects, delayedTaskDetails, unlockNeededDetails,
       phaseCategories: computePhaseCategoryReports(items, todayISO),
-      projectItems: items
+      projectItems: items, priorityBreakdown
     };
   }).sort((a, b) => a.streamName.localeCompare(b.streamName));
 }
@@ -4351,13 +4381,14 @@ function DashboardReportView({ projectList, records }) {
 
             h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:10 } },
               sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
-              sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctInProgress}%`, background:"#4F9D9D" } }),
+              sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctDesign}%`, background:"#4F9D9D" } }),
+              sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctDevelopment}%`, background:"#1E3A5F" } }),
               sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctHold}%`, background:"#F59E0B" } })
             ),
             h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:12 } },
-              h("span", null, h("span", { style:{ color:"#22C55E", fontWeight:700 } }, "\u25CF "), `Completed ${sr.pctCompleted}% (${sr.completed})`),
-              h("span", null, h("span", { style:{ color:"#4F9D9D", fontWeight:700 } }, "\u25CF "), `In Progress ${sr.pctInProgress}% (${sr.inProgress})`),
-              h("span", null, h("span", { style:{ color:"#F59E0B", fontWeight:700 } }, "\u25CF "), `Hold ${sr.pctHold}% (${sr.hold})`)
+              sr.priorityBreakdown.map(pb => h("span", { key:pb.priority },
+                h("span", { style:{ color: PRIORITY_FG[pb.priority], fontWeight:700 } }, "\u25CF "), `${pb.priority} ${pb.pct}% (${pb.count})`
+              ))
             ),
 
             h("div", { style:{ display:"flex", flexWrap:"wrap", gap:16, marginBottom:12, fontSize:12 } },
@@ -4437,7 +4468,12 @@ function DashboardReportView({ projectList, records }) {
                   return h("div", { key:cat.key, style:{ border:"1px solid #E2E8F0", borderRadius:9, padding:12 } },
                     h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:3 } },
                     h("div", { style:{ fontSize:13, fontWeight:700, color:"#152238" } }, cat.label),
-                    h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `Phase ${cat.codes.join(", ")}`)
+                    h("div", { style:{ textAlign:"right" } },
+                      h("div", { style:{ fontSize:10.5, color:"#94A3B8" } }, `Phase ${cat.codes.join(", ")}`),
+                      cat.key !== "cancelled" && h("div", { style:{ fontSize:11, color:"#1E3A5F", fontWeight:700 } },
+                        `${sr.active ? Math.round((cat.projectCount / sr.active) * 100) : 0}%`
+                      )
+                    )
                   ),
                   h("div", { style:{ fontSize:11.5, color:"#64748B", marginBottom:10 } }, `${cat.projectCount} project${cat.projectCount === 1 ? "" : "s"}`),
 
@@ -4498,6 +4534,7 @@ function DashboardReportView({ projectList, records }) {
       inProgress: pendingMeasurement.taskDetails.inProgress || [],
       delayed: pendingMeasurement.taskDetails.delayed,
       phaseCategories: pendingMeasurement.sr.phaseCategories,
+      activeCount: pendingMeasurement.sr.active,
       onMeasured: handleTaskListsMeasured
     }),
     pendingCapture && pendingCapture.pages.map((page, i) => h(StreamSlidePage, {
