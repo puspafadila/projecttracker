@@ -3721,8 +3721,9 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
   const inProgressChunks = paginateItemsByHeight(inProgress, measuredHeights.inProgress, CONTINUATION_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
   const delayedChunks = paginateItemsByHeight(delayed, measuredHeights.delayed, CONTINUATION_TASK_BUDGET_PX, CONTINUATION_TASK_BUDGET_PX);
   const taskPageCount = Math.max(completedChunks.length, inProgressChunks.length, delayedChunks.length, 1);
+  const taskPages = [];
   for (let i = 0; i < taskPageCount; i++) {
-    pages.push({
+    taskPages.push({
       type:"tasks", isFirst:false,
       completedChunk: completedChunks[i] || [],
       inProgressChunk: inProgressChunks[i] || [],
@@ -3730,13 +3731,15 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
     });
   }
 
-  let pi = 0, isFirstDpPage = true;
+  // Delayed Projects, then Unlock Needed, come right after the header
+  // page; Tasks Completed/In Progress/Delayed come last.
+  let pi = 0;
   do {
     pages.push({
       type:"delayed-projects", isFirst:false,
       delayedProjectsChunk: delayedProjects.slice(pi, pi + DELAYED_PROJECTS_PER_PAGE)
     });
-    pi += DELAYED_PROJECTS_PER_PAGE; isFirstDpPage = false;
+    pi += DELAYED_PROJECTS_PER_PAGE;
   } while (pi < delayedProjects.length);
 
   const unlockNeeded = sr.unlockNeededDetails;
@@ -3748,6 +3751,8 @@ function paginateStreamReport(sr, taskDetails, measuredHeights) {
     });
     ui += DELAYED_PROJECTS_PER_PAGE;
   } while (ui < unlockNeeded.length);
+
+  pages.push(...taskPages);
 
   return pages;
 }
@@ -4270,6 +4275,7 @@ function DashboardReportView({ projectList, records }) {
   const [expandedCategory, setExpandedCategory] = useState({}); // { [`${stream}::${catKey}`]: "projects" | "delayed" | null }
   const [expandedPhaseSection, setExpandedPhaseSection] = useState({}); // { [streamName]: boolean }
   const [expandedUnlock, setExpandedUnlock] = useState({}); // { [streamName]: boolean }
+  const [expandedDelayedProjects, setExpandedDelayedProjects] = useState({}); // { [streamName]: boolean }
   const [downloadingStream, setDownloadingStream] = useState(null);
   const [downloadModalStream, setDownloadModalStream] = useState(null);
   const [pendingMeasurement, setPendingMeasurement] = useState(null); // { sr, taskDetails, period } \u2014 waiting on TaskListMeasurer
@@ -4379,16 +4385,16 @@ function DashboardReportView({ projectList, records }) {
               )
             ),
 
-            h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:10 } },
+            h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:8 } },
+              sr.priorityBreakdown.map(pb => h("span", { key:pb.priority },
+                h("span", { style:{ color: PRIORITY_FG[pb.priority], fontWeight:700 } }, "\u25CF "), `${pb.priority} ${pb.pct}% (${pb.count})`
+              ))
+            ),
+            h("div", { style:{ height:8, borderRadius:6, background:"#E2E8F0", overflow:"hidden", display:"flex", marginBottom:12 } },
               sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctCompleted}%`, background:"#22C55E" } }),
               sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctDesign}%`, background:"#4F9D9D" } }),
               sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctDevelopment}%`, background:"#1E3A5F" } }),
               sr.active > 0 && h("div", { style:{ height:"100%", width:`${sr.pctHold}%`, background:"#F59E0B" } })
-            ),
-            h("div", { style:{ display:"flex", gap:14, flexWrap:"wrap", fontSize:12, color:"#64748B", marginBottom:12 } },
-              sr.priorityBreakdown.map(pb => h("span", { key:pb.priority },
-                h("span", { style:{ color: PRIORITY_FG[pb.priority], fontWeight:700 } }, "\u25CF "), `${pb.priority} ${pb.pct}% (${pb.count})`
-              ))
             ),
 
             h("div", { style:{ display:"flex", flexWrap:"wrap", gap:16, marginBottom:12, fontSize:12 } },
@@ -4418,39 +4424,6 @@ function DashboardReportView({ projectList, records }) {
               ))
             ),
 
-            h("div", { style:{ borderTop:"1px solid #F1F5F9", paddingTop:10 } },
-              h("div", { style:{ fontSize:12, fontWeight:700, color: sr.atRisk.length > 0 ? "#C2410C" : "#166534", marginBottom: sr.atRisk.length > 0 ? 6 : 0 } },
-                sr.atRisk.length > 0 ? `\u26A0 ${sr.atRisk.length} project${sr.atRisk.length === 1 ? "" : "s"} delayed` : "\u2713 No delayed projects"
-              ),
-              sr.atRisk.length > 0 && h("div", { style:{ display:"flex", flexDirection:"column", gap:5 } },
-                sr.atRisk.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#334155", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
-                  h("span", null, `${ps.row.project || "\u2014"} `, h("span", { style:{ color:"#94A3B8" } }, `(${ps.row.application || "\u2014"})`)),
-                  h("span", { style:{ color:"#C2410C", fontWeight:600 } }, ps.riskLabel)
-                ))
-              )
-            ),
-
-            h("button", {
-              onClick: () => setExpandedUnlock(s => ({ ...s, [sr.streamName]: !s[sr.streamName] })),
-              disabled: sr.unlockNeededDetails.length === 0,
-              style:{ display:"flex", alignItems:"center", gap:6, width:"100%", background:"none", border:"none",
-                cursor: sr.unlockNeededDetails.length > 0 ? "pointer" : "default",
-                margin:"16px 0 2px", borderTop:"1px solid #F1F5F9", paddingTop:12 }
-            },
-              sr.unlockNeededDetails.length > 0 && h(expandedUnlock[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ color:"#EA580C", flexShrink:0 } }),
-              h("span", { style:{ fontSize:13, fontWeight:700, color: sr.unlockNeededDetails.length > 0 ? "#EA580C" : "#94A3B8" } }, `\u2691 Unlock needed (${sr.unlockNeededDetails.length})`)
-            ),
-            expandedUnlock[sr.streamName] && sr.unlockNeededDetails.length > 0 && h("div", {
-              style:{ border:"1px solid #FED7AA", background:"#FFF7ED", borderRadius:9, padding:"10px 12px", margin:"8px 0 0", display:"flex", flexDirection:"column", gap:7, maxHeight:240, overflow:"auto" }
-            },
-              sr.unlockNeededDetails.map(u => h("div", { key:u.id, style:{ fontSize:12, color:"#7C2D12", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
-                h("span", null,
-                  h("span", { style:{ fontWeight:600 } }, u.task), " \u2014 ",
-                  h("span", { style:{ color:"#9A3412" } }, `${u.project}${u.application ? ` (${u.application})` : ""}`), " \u00B7 PIC: ", u.pic, " \u00B7 ", u.status
-                ),
-                h("span", { style:{ fontWeight:600, flexShrink:0 } }, u.date || "No date")
-              ))
-            ),
 
             h("button", {
               onClick: () => setExpandedPhaseSection(s => ({ ...s, [sr.streamName]: !s[sr.streamName] })),
@@ -4458,7 +4431,7 @@ function DashboardReportView({ projectList, records }) {
                 margin:"16px 0 2px", borderTop:"1px solid #F1F5F9", paddingTop:12 }
             },
               h(expandedPhaseSection[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ color:"#64748B", flexShrink:0 } }),
-              h("span", { style:{ fontSize:13, fontWeight:700, color:"#152238" } }, "Phase Category Report")
+              h("span", { style:{ fontSize:13, fontWeight:700, color:"#152238" } }, "\u25D0 Progress by Phase")
             ),
             expandedPhaseSection[sr.streamName] && h("div", null,
               h("p", { style:{ fontSize:11.5, color:"#94A3B8", margin:"6px 0 10px" } }, "Projects in this stream grouped by phase, with task-level analysis."),
@@ -4520,7 +4493,56 @@ function DashboardReportView({ projectList, records }) {
                 );
               })
             )
-            )
+            ),
+
+
+            h("button", {
+              onClick: () => setExpandedDelayedProjects(s => ({ ...s, [sr.streamName]: !s[sr.streamName] })),
+              disabled: sr.atRisk.length === 0,
+              style:{ display:"flex", alignItems:"center", gap:6, width:"100%", background:"none", border:"none",
+                cursor: sr.atRisk.length > 0 ? "pointer" : "default",
+                margin:"16px 0 2px", borderTop:"1px solid #F1F5F9", paddingTop:12 }
+            },
+              h(expandedDelayedProjects[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ color: sr.atRisk.length > 0 ? "#C2410C" : "#94A3B8", flexShrink:0 } }),
+              h("span", { style:{ fontSize:13, fontWeight:700, color: sr.atRisk.length > 0 ? "#C2410C" : "#166534" } },
+                sr.atRisk.length > 0 ? `\u26A0 Project Delayed (${sr.atRisk.length})` : "\u2713 No delayed projects"
+              )
+            ),
+            sr.atRisk.length > 0 && expandedDelayedProjects[sr.streamName] && h("div", {
+              style:{ border:"1px solid #FED7AA", background:"#FFF7ED", borderRadius:9, padding:"10px 12px", margin:"8px 0 0", display:"flex", flexDirection:"column", gap:7, maxHeight:240, overflow:"auto" }
+            },
+              sr.atRisk.map(ps => h("div", { key:ps.row.id, style:{ fontSize:12, color:"#7C2D12", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
+                h("span", null,
+                  h("span", { style:{ fontWeight:600 } }, ps.row.project || "\u2014"), " \u2014 ",
+                  h("span", { style:{ color:"#9A3412" } }, ps.row.application || "\u2014")
+                ),
+                h("span", { style:{ fontWeight:600, flexShrink:0 } }, ps.riskLabel)
+              ))
+            ),
+
+
+            h("button", {
+              onClick: () => setExpandedUnlock(s => ({ ...s, [sr.streamName]: !s[sr.streamName] })),
+              disabled: sr.unlockNeededDetails.length === 0,
+              style:{ display:"flex", alignItems:"center", gap:6, width:"100%", background:"none", border:"none",
+                cursor: sr.unlockNeededDetails.length > 0 ? "pointer" : "default",
+                margin:"16px 0 2px", borderTop:"1px solid #F1F5F9", paddingTop:12 }
+            },
+              sr.unlockNeededDetails.length > 0 ? h(expandedUnlock[sr.streamName] ? Icon.down : Icon.chevronRight, { style:{ color:"#EA580C", flexShrink:0 } }) : h(Icon.chevronRight, { style:{ color:"#94A3B8", flexShrink:0 } }),
+              h("span", { style:{ fontSize:13, fontWeight:700, color: sr.unlockNeededDetails.length > 0 ? "#EA580C" : "#94A3B8" } }, `\u2691 Unlock needed (${sr.unlockNeededDetails.length})`)
+            ),
+            expandedUnlock[sr.streamName] && sr.unlockNeededDetails.length > 0 && h("div", {
+              style:{ border:"1px solid #FED7AA", background:"#FFF7ED", borderRadius:9, padding:"10px 12px", margin:"8px 0 0", display:"flex", flexDirection:"column", gap:7, maxHeight:240, overflow:"auto" }
+            },
+              sr.unlockNeededDetails.map(u => h("div", { key:u.id, style:{ fontSize:12, color:"#7C2D12", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" } },
+                h("span", null,
+                  h("span", { style:{ fontWeight:600 } }, u.task), " \u2014 ",
+                  h("span", { style:{ color:"#9A3412" } }, `${u.project}${u.application ? ` (${u.application})` : ""}`), " \u00B7 PIC: ", u.pic, " \u00B7 ", u.status
+                ),
+                h("span", { style:{ fontWeight:600, flexShrink:0 } }, u.date || "No date")
+              ))
+            ),
+
           )),
         ),
     h(MessageModal, { open: !!modalMsg, title: modalMsg && modalMsg.title, message: modalMsg && modalMsg.message, tone: modalMsg && modalMsg.tone, onClose: () => setModalMsg(null) }),
