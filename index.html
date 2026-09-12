@@ -3910,7 +3910,7 @@ function StreamSlidePage({ sr, page, pageIndex, totalPages, totals, period }) {
 
     page.type === "delayed-and-unlock" && h("div", null,
       h("div", { style:{ fontSize:13, fontWeight:700, color: totals.delayedProjects > 0 ? "#C2410C" : "#166534", marginBottom:8 } },
-        totals.delayedProjects > 0 ? `\u26A0 Delayed Projects (${totals.delayedProjects})` : "\u2713 No delayed projects"
+        totals.delayedProjects > 0 ? `\u26A0 Project Delayed (${totals.delayedProjects})` : "\u2713 No delayed projects"
       ),
       page.delayedProjectsChunk.length > 0 && h("div", { style:{ marginBottom:16 } },
         page.delayedProjectsChunk.map(ps => delayedProjectRow(ps))
