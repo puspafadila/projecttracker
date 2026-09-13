@@ -141,7 +141,7 @@ async function fetchAllFromSupabase() {
   });
   (todosRes.data || []).forEach(t => {
     const r = ensureRecord(t.project_id); if (!r) return;
-    r.todos.push({ id:t.id, task:t.task||"", pic:t.pic||"", dueDate:t.due_date||"", status:t.status||"", blocker:t.blocker||"", createdBy:t.created_by||"" });
+    r.todos.push({ id:t.id, task:t.task||"", pic:t.pic||"", dueDate:t.due_date||"", status:t.status||"", blocker:t.blocker||"", flagged: !!t.flagged, createdBy:t.created_by||"" });
   });
   (updatesRes.data || []).forEach(u => {
     const r = ensureRecord(u.project_id); if (!r) return;
@@ -279,7 +279,7 @@ async function sbReplaceTasksTodos(projectId, tasks, todos) {
   if (todos.length) {
     const { error } = await supabaseClient.from("todos").insert(todos.map(t => ({
       id:t.id, project_id:projectId, task:t.task||null, pic:t.pic||null, due_date:t.dueDate||null,
-      status:t.status||null, blocker:t.blocker||null, created_by:t.createdBy||null
+      status:t.status||null, blocker:t.blocker||null, flagged: !!t.flagged, created_by:t.createdBy||null
     })));
     sqError("save todos", error);
   }
