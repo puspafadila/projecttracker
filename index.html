@@ -445,6 +445,12 @@ function truncateForLog(v, max = 60) {
    defs, returning which rows were added/removed, and for updated rows,
    the exact before/after value of every field that changed. */
 function diffRowsById(oldRows, newRows, columnDefs) {
+  // Boolean columns (e.g. "flagged") must be turned into a readable string
+  // BEFORE they reach truncateForLog/norm \u2014 those assume string-or-falsy
+  // input and calling .trim() on a raw `true` throws (norm(true) crashes
+  // with "true.trim is not a function"), which is what broke Save after
+  // flagging a row and silently aborted the whole commit.
+  const toLogValue = v => typeof v === "boolean" ? (v ? "Yes" : "No") : (v || "");
   const oldById = new Map((oldRows || []).map(r => [r.id, r]));
   const newById = new Map((newRows || []).map(r => [r.id, r]));
   const added = (newRows || []).filter(r => !oldById.has(r.id));
@@ -454,8 +460,8 @@ function diffRowsById(oldRows, newRows, columnDefs) {
     .map(r => {
       const old = oldById.get(r.id);
       const changed = columnDefs
-        .filter(c => String(old[c.key] || "") !== String(r[c.key] || ""))
-        .map(c => ({ key:c.key, label:c.label, before: old[c.key] || "", after: r[c.key] || "" }));
+        .filter(c => String(toLogValue(old[c.key])) !== String(toLogValue(r[c.key])))
+        .map(c => ({ key:c.key, label:c.label, before: toLogValue(old[c.key]), after: toLogValue(r[c.key]) }));
       return { row:r, changed };
     })
     .filter(u => u.changed.length > 0);
@@ -1544,7 +1550,7 @@ function TodoHeaderCell({ col, sortConfig, onSort, filterOptions, filterSelected
   );
 }
 
-function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picListId, currentUser, projectStream }) {
+function TodoTable({ todos, onUpdate, onToggleFlag, onRemove, onReorder, hiddenColumns, picListId, currentUser, projectStream }) {
   const [sortConfig, setSortConfig] = useState({ key:null, dir:"asc" });
   const [filters, setFilters] = useState({});
   const [dragId, setDragId] = useState(null);
@@ -1620,7 +1626,7 @@ function TodoTable({ todos, onUpdate, onRemove, onReorder, hiddenColumns, picLis
               h("td", { style:{ ...tdStyle, textAlign:"center", width:36 } },
                 canModifyRecord(t, currentUser, projectStream)
                   ? h("button", {
-                      onClick:()=>onUpdate(t.id,"flagged", !t.flagged),
+                      onClick:()=>onToggleFlag(t.id),
                       title: t.flagged ? "Unflag this task" : "Flag this task for attention",
                       style:{ color: t.flagged ? "#EA580C" : "#CBD5E1", background:"none", border:"none", display:"flex", cursor:"pointer" }
                     }, h(Icon.flag,{ filled: !!t.flagged }))
@@ -1785,6 +1791,11 @@ function DetailView({
     markDirty();
   };
   const draftUpdateTodo = (todoId, field, value) => { setDraftTodos(list => list.map(t => t.id===todoId ? { ...t, [field]:value } : t)); markDirty(); };
+  // Reads the current flagged value from inside the state updater itself
+  // (rather than from a `!t.flagged` value captured at render time), so a
+  // rapid click right after another edit can never toggle against a
+  // stale snapshot of the row.
+  const draftToggleTodoFlag = (todoId) => { setDraftTodos(list => list.map(t => t.id===todoId ? { ...t, flagged: !t.flagged } : t)); markDirty(); };
   const draftRemoveTodo = todoId => { setDraftTodos(list => list.filter(t => t.id!==todoId)); markDirty(); };
   const draftReorderTodo = (dragId, dropId) => {
     if (!canAddToProject || dragId === dropId) return;
@@ -1810,6 +1821,7 @@ function DetailView({
   const effImportTasks = useDraft ? draftImportTasks : () => {};
   const effAddTodo = useDraft ? draftAddTodo : () => {};
   const effUpdateTodo = useDraft ? draftUpdateTodo : () => {};
+  const effToggleTodoFlag = useDraft ? draftToggleTodoFlag : () => {};
   const effRemoveTodo = useDraft ? draftRemoveTodo : () => {};
   const effReorderTodo = useDraft ? draftReorderTodo : () => {};
 
@@ -1981,7 +1993,7 @@ function DetailView({
             h(Icon.plus,{}), "Add Task")
         )
       ),
-      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onRemove: effRemoveTodo, onReorder: effReorderTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser, projectStream: projectRow && projectRow.stream })
+      h(TodoTable, { todos: effectiveTodos, onUpdate: effUpdateTodo, onToggleFlag: effToggleTodoFlag, onRemove: effRemoveTodo, onReorder: effReorderTodo, hiddenColumns: todoHiddenColumns, picListId, currentUser, projectStream: projectRow && projectRow.stream })
     ),
 
     h("div", { className:"card", style:{ marginTop:16 } },
