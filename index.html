@@ -2119,7 +2119,7 @@ function sectionToHtmlTable(title, headers, rows) {
     `<tr>${row.map((c, j) => `<td style="${widthStyle(headers[j])}padding:4px 8px;border:1px solid #ccc">${escapeHtmlText(c)}</td>`).join("")}</tr>`
   ).join("");
   return `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(title)}</p>` +
-    `<table border="1" bordercolor="#cccccc" cellspacing="0" cellpadding="4" style="border-collapse:collapse;border-color:#cccccc;font-family:Arial,sans-serif;font-size:13px;table-layout:fixed">` +
+    `<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;table-layout:fixed">` +
     `<thead>${theadRow}</thead><tbody>${bodyRows}</tbody></table>`;
 }
 function sectionToText(title, headers, rows) {
@@ -2243,11 +2243,16 @@ function ReportTableModal({ data, onClose }) {
   // projects. Unlock-needed tasks are pulled out into their own standalone
   // section at the top instead, since they cut across projects.
   const ragByProjectKey = new Map();
-  (sr.projectItems || []).forEach(ps => { ragByProjectKey.set(`${ps.row.application || ""}||${ps.row.project || ""}`, ps.row.rag || ""); });
+  const phaseByProjectKey = new Map();
+  (sr.projectItems || []).forEach(ps => {
+    const key = `${ps.row.application || ""}||${ps.row.project || ""}`;
+    ragByProjectKey.set(key, ps.row.rag || "");
+    phaseByProjectKey.set(key, ps.row.phase || "");
+  });
   const projectMap = new Map();
   const ensureProject = (project, application) => {
     const key = `${application || ""}||${project || ""}`;
-    if (!projectMap.has(key)) projectMap.set(key, { project: project || "Untitled", application: application || "\u2014", rag: ragByProjectKey.get(key) || "", tasks: [], delayedLabel: null });
+    if (!projectMap.has(key)) projectMap.set(key, { project: project || "Untitled", application: application || "\u2014", rag: ragByProjectKey.get(key) || "", phase: phaseByProjectKey.get(key) || "", tasks: [], delayedLabel: null });
     return projectMap.get(key);
   };
   taskDetails.completed.forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "Completed"]));
@@ -2259,22 +2264,47 @@ function ReportTableModal({ data, onClose }) {
   const unlockCols = ["Application", "Project", "Task", "PIC", "Date", "Status"];
   const unlockRows = sr.unlockNeededDetails.map(u => [u.application || "\u2014", u.project, u.task, u.pic, u.date || "\u2014", u.status || "\u2014"]);
   const unlockTitle = `\u2691 Unlock Needed (${unlockRows.length})`;
-  const projects = Array.from(projectMap.values()).sort((a, b) => a.project.localeCompare(b.project));
+  // Only Design/Development-phase projects appear here (Completed, Hold,
+  // and Cancelled projects have no further task action needed), grouped
+  // under those two phase categories.
+  const allProjects = Array.from(projectMap.values());
+  const activeProjects = allProjects.filter(p => !["6","60","61","62"].includes(phaseLeadingCode(p.phase)));
+  const designProjects = activeProjects.filter(p => ["0","1","2"].includes(phaseLeadingCode(p.phase))).sort((a, b) => a.project.localeCompare(b.project));
+  const developmentProjects = activeProjects.filter(p => ["3","4","5"].includes(phaseLeadingCode(p.phase))).sort((a, b) => a.project.localeCompare(b.project));
+  const otherProjects = activeProjects.filter(p => !["0","1","2","3","4","5"].includes(phaseLeadingCode(p.phase))).sort((a, b) => a.project.localeCompare(b.project));
+  const phaseGroups = [
+    { label:"Design", projects: designProjects },
+    { label:"Development", projects: developmentProjects },
+    ...(otherProjects.length ? [{ label:"Other", projects: otherProjects }] : [])
+  ];
+  const projects = activeProjects.sort((a, b) => a.project.localeCompare(b.project));
 
+  const projectHeading = p => `(${p.application}) ${p.project} - ${p.phase || "\u2014"} - ${p.rag || "\u2014"}`;
   const projectToHtml = p => {
-    let out = `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(p.project)} (${escapeHtmlText(p.application)})${p.rag ? ` \u2014 RAG: ${escapeHtmlText(p.rag)}` : ""}</p>`;
-    if (p.delayedLabel) out += `<p style="font-weight:600;margin:0 0 6px 0;font-family:Arial,sans-serif">\u26A0 Project Delayed: ${escapeHtmlText(p.delayedLabel)}</p>`;
+    let out = `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(projectHeading(p))}</p>`;
+    if (p.delayedLabel) out += `<p style="color:#C2410C;font-weight:600;margin:0 0 6px 0;font-family:Arial,sans-serif">\u26A0 Project Delayed: ${escapeHtmlText(p.delayedLabel)}</p>`;
     out += sectionToHtmlTable("", taskCols, p.tasks).replace(/^<p[^>]*><\/p>/, "");
     return out;
   };
   const projectToText = p => {
-    const lines = [`${p.project} (${p.application})${p.rag ? ` \u2014 RAG: ${p.rag}` : ""}`];
+    const lines = [projectHeading(p)];
     if (p.delayedLabel) lines.push(`Project Delayed: ${p.delayedLabel}`);
     lines.push(sectionToText("", taskCols, p.tasks).split("\n").slice(1).join("\n"));
     return lines.join("\n");
   };
-  const getAllHtml = () => [sectionToHtmlTable(unlockTitle, unlockCols, unlockRows), ...projects.map(projectToHtml)].join("<br>");
-  const getAllText = () => [sectionToText(unlockTitle, unlockCols, unlockRows), ...projects.map(projectToText)].join("\n\n");
+  const remarkText = "This report is automatically generated from https://project-management-office-gray.vercel.app/";
+  const getAllHtml = () => [
+    sectionToHtmlTable(unlockTitle, unlockCols, unlockRows),
+    ...phaseGroups.flatMap(g => [
+      `<p style="font-weight:700;font-size:15px;margin:12px 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(g.label)}</p>`,
+      ...g.projects.map(projectToHtml)
+    ])
+  ].join("<br>")
+    + `<p style="font-size:6px;font-style:italic;color:#94A3B8;font-family:Arial,sans-serif;margin-top:16px">${escapeHtmlText(remarkText)}</p>`;
+  const getAllText = () => [
+    sectionToText(unlockTitle, unlockCols, unlockRows),
+    ...phaseGroups.flatMap(g => [g.label.toUpperCase(), ...g.projects.map(projectToText)])
+  ].join("\n\n") + `\n\n${remarkText}`;
 
   return h("div", {
     style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:210, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
@@ -2301,21 +2331,22 @@ function ReportTableModal({ data, onClose }) {
           reportTable(unlockCols, unlockRows)
         ),
         projects.length === 0
-          ? h("div", { style:{ fontSize:13, color:"#94A3B8" } }, "No projects with activity in this period.")
-          : projects.map((p, i) => h("div", { key:i, style:{ marginBottom:24, paddingBottom:20, borderBottom: i < projects.length - 1 ? "1px solid #F1F5F9" : "none" } },
-              h("div", { style:{ display:"flex", alignItems:"center", marginBottom:6 } },
-                h("div", null,
+          ? h("div", { style:{ fontSize:13, color:"#94A3B8" } }, "No Design/Development projects with activity in this period.")
+          : phaseGroups.map((g, gi) => g.projects.length > 0 && h("div", { key:gi, style:{ marginBottom:16 } },
+              h("h3", { style:{ fontSize:15, fontWeight:700, color:"#152238", margin:"0 0 10px", paddingBottom:6, borderBottom:"2px solid #E2E8F0" } }, g.label),
+              g.projects.map((p, i) => h("div", { key:i, style:{ marginBottom:24, paddingBottom:20, borderBottom: i < g.projects.length - 1 ? "1px solid #F1F5F9" : "none" } },
+                h("div", { style:{ display:"flex", alignItems:"center", marginBottom:6 } },
                   h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
-                    h("h4", { style:{ fontSize:14, fontWeight:700, color:"#152238", margin:0 } }, p.project),
+                    h("h4", { style:{ fontSize:14, fontWeight:700, color:"#152238", margin:0 } }, projectHeading(p)),
                     p.rag && h(StaticBadge, { value:p.rag, bgMap:RAG_BG, fgMap:RAG_FG })
                   ),
-                  h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, p.application)
+                  h(CopyButton, { getHtml:() => projectToHtml(p), getText:() => projectToText(p), onFallback:setFallbackText })
                 ),
-                h(CopyButton, { getHtml:() => projectToHtml(p), getText:() => projectToText(p), onFallback:setFallbackText })
-              ),
-              p.delayedLabel && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600, marginBottom:8 } }, `\u26A0 Project Delayed: ${p.delayedLabel}`),
-              reportTable(taskCols, p.tasks)
-            ))
+                p.delayedLabel && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600, marginBottom:8 } }, `\u26A0 Project Delayed: ${p.delayedLabel}`),
+                reportTable(taskCols, p.tasks)
+              ))
+            )),
+        h("div", { style:{ fontSize:6, fontStyle:"italic", color:"#94A3B8", marginTop:16 } }, remarkText)
       )
     )
   );
@@ -5352,6 +5383,21 @@ function AppRoot() {
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const onWizardDraftStateChange = (isDirty, commitFn) => { setWizardDirty(isDirty); wizardCommitRef.current = commitFn; };
   const commitActiveWizardStep = () => wizardCommitRef.current();
+  // Browsers no longer allow a custom message or custom "Save/Discard"
+  // buttons on the tab-close/refresh warning \u2014 only their own generic
+  // "Changes may not be saved" prompt, with wording the browser controls.
+  // This is that same generic prompt, triggered whenever there's an
+  // unsaved wizard draft, so closing the tab or refreshing isn't silent.
+  useEffect(() => {
+    const handleBeforeUnload = e => {
+      if (!wizardDirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [wizardDirty]);
   const guardedNavigate = action => {
     if (wizardDirty) { setPendingNavigation(() => action); return; }
     action();
