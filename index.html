@@ -2119,7 +2119,7 @@ function sectionToHtmlTable(title, headers, rows) {
     `<tr>${row.map((c, j) => `<td style="${widthStyle(headers[j])}padding:4px 8px;border:1px solid #ccc">${escapeHtmlText(c)}</td>`).join("")}</tr>`
   ).join("");
   return `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(title)}</p>` +
-    `<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;table-layout:fixed">` +
+    `<table border="1" bordercolor="#cccccc" cellspacing="0" cellpadding="4" style="border-collapse:collapse;border-color:#cccccc;font-family:Arial,sans-serif;font-size:13px;table-layout:fixed">` +
     `<thead>${theadRow}</thead><tbody>${bodyRows}</tbody></table>`;
 }
 function sectionToText(title, headers, rows) {
@@ -2239,40 +2239,42 @@ function ReportTableModal({ data, onClose }) {
 
   // Group everything by project: each project's tasks (Completed/In
   // Progress/Delayed, all with the same columns) together, plus its
-  // delayed-project status and any unlock-needed items, instead of one
-  // table per type across all projects.
+  // delayed-project status, instead of one table per type across all
+  // projects. Unlock-needed tasks are pulled out into their own standalone
+  // section at the top instead, since they cut across projects.
+  const ragByProjectKey = new Map();
+  (sr.projectItems || []).forEach(ps => { ragByProjectKey.set(`${ps.row.application || ""}||${ps.row.project || ""}`, ps.row.rag || ""); });
   const projectMap = new Map();
   const ensureProject = (project, application) => {
     const key = `${application || ""}||${project || ""}`;
-    if (!projectMap.has(key)) projectMap.set(key, { project: project || "Untitled", application: application || "\u2014", tasks: [], delayedLabel: null, unlockItems: [] });
+    if (!projectMap.has(key)) projectMap.set(key, { project: project || "Untitled", application: application || "\u2014", rag: ragByProjectKey.get(key) || "", tasks: [], delayedLabel: null });
     return projectMap.get(key);
   };
-  taskDetails.completed.forEach(t => ensureProject(t.project, t.application).tasks.push(["Completed", t.task, t.pic, t.date || "\u2014"]));
-  (taskDetails.inProgress || []).forEach(t => ensureProject(t.project, t.application).tasks.push(["In Progress", t.task, t.pic, t.date || "\u2014"]));
-  taskDetails.delayed.forEach(t => ensureProject(t.project, t.application).tasks.push(["Delayed", t.task, t.pic, t.date || "\u2014"]));
+  taskDetails.completed.forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "Completed"]));
+  (taskDetails.inProgress || []).forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "In Progress"]));
+  taskDetails.delayed.forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "Delayed"]));
   sr.atRisk.forEach(ps => { ensureProject(ps.row.project, ps.row.application).delayedLabel = ps.riskLabel; });
-  sr.unlockNeededDetails.forEach(u => ensureProject(u.project, u.application).unlockItems.push([u.task, u.pic, u.status || "\u2014", u.date || "\u2014"]));
 
-  const taskCols = ["Type", "Task", "PIC", "Date"];
-  const unlockCols = ["Task", "PIC", "Status", "Date"];
+  const taskCols = ["Task", "PIC", "Date", "Status"];
+  const unlockCols = ["Application", "Project", "Task", "PIC", "Date", "Status"];
+  const unlockRows = sr.unlockNeededDetails.map(u => [u.application || "\u2014", u.project, u.task, u.pic, u.date || "\u2014", u.status || "\u2014"]);
+  const unlockTitle = `\u2691 Unlock Needed (${unlockRows.length})`;
   const projects = Array.from(projectMap.values()).sort((a, b) => a.project.localeCompare(b.project));
 
   const projectToHtml = p => {
-    let out = `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(p.project)} (${escapeHtmlText(p.application)})</p>`;
-    if (p.delayedLabel) out += `<p style="color:#C2410C;font-weight:600;margin:0 0 6px 0;font-family:Arial,sans-serif">\u26A0 Project Delayed: ${escapeHtmlText(p.delayedLabel)}</p>`;
+    let out = `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(p.project)} (${escapeHtmlText(p.application)})${p.rag ? ` \u2014 RAG: ${escapeHtmlText(p.rag)}` : ""}</p>`;
+    if (p.delayedLabel) out += `<p style="font-weight:600;margin:0 0 6px 0;font-family:Arial,sans-serif">\u26A0 Project Delayed: ${escapeHtmlText(p.delayedLabel)}</p>`;
     out += sectionToHtmlTable("", taskCols, p.tasks).replace(/^<p[^>]*><\/p>/, "");
-    if (p.unlockItems.length) out += `<p style="font-weight:600;color:#EA580C;margin:8px 0 4px 0;font-family:Arial,sans-serif">\u2691 Unlock Needed</p>` + sectionToHtmlTable("", unlockCols, p.unlockItems).replace(/^<p[^>]*><\/p>/, "");
     return out;
   };
   const projectToText = p => {
-    const lines = [`${p.project} (${p.application})`];
+    const lines = [`${p.project} (${p.application})${p.rag ? ` \u2014 RAG: ${p.rag}` : ""}`];
     if (p.delayedLabel) lines.push(`Project Delayed: ${p.delayedLabel}`);
     lines.push(sectionToText("", taskCols, p.tasks).split("\n").slice(1).join("\n"));
-    if (p.unlockItems.length) { lines.push("Unlock Needed"); lines.push(sectionToText("", unlockCols, p.unlockItems).split("\n").slice(1).join("\n")); }
     return lines.join("\n");
   };
-  const getAllHtml = () => projects.map(projectToHtml).join("<br>");
-  const getAllText = () => projects.map(projectToText).join("\n\n");
+  const getAllHtml = () => [sectionToHtmlTable(unlockTitle, unlockCols, unlockRows), ...projects.map(projectToHtml)].join("<br>");
+  const getAllText = () => [sectionToText(unlockTitle, unlockCols, unlockRows), ...projects.map(projectToText)].join("\n\n");
 
   return h("div", {
     style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:210, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
@@ -2294,22 +2296,25 @@ function ReportTableModal({ data, onClose }) {
       ),
       h("div", { style:{ padding:20, overflow:"auto" } },
         h(CopyFallbackBox, { text:fallbackText }),
+        h("div", { style:{ marginBottom:24, paddingBottom:20, borderBottom:"1px solid #F1F5F9" } },
+          reportSectionHeader(unlockTitle, "#EA580C", unlockCols, unlockRows, setFallbackText),
+          reportTable(unlockCols, unlockRows)
+        ),
         projects.length === 0
           ? h("div", { style:{ fontSize:13, color:"#94A3B8" } }, "No projects with activity in this period.")
           : projects.map((p, i) => h("div", { key:i, style:{ marginBottom:24, paddingBottom:20, borderBottom: i < projects.length - 1 ? "1px solid #F1F5F9" : "none" } },
               h("div", { style:{ display:"flex", alignItems:"center", marginBottom:6 } },
                 h("div", null,
-                  h("h4", { style:{ fontSize:14, fontWeight:700, color:"#152238", margin:0 } }, p.project),
+                  h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
+                    h("h4", { style:{ fontSize:14, fontWeight:700, color:"#152238", margin:0 } }, p.project),
+                    p.rag && h(StaticBadge, { value:p.rag, bgMap:RAG_BG, fgMap:RAG_FG })
+                  ),
                   h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, p.application)
                 ),
                 h(CopyButton, { getHtml:() => projectToHtml(p), getText:() => projectToText(p), onFallback:setFallbackText })
               ),
               p.delayedLabel && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600, marginBottom:8 } }, `\u26A0 Project Delayed: ${p.delayedLabel}`),
-              reportTable(taskCols, p.tasks),
-              p.unlockItems.length > 0 && h("div", { style:{ marginTop:10 } },
-                h("div", { style:{ fontSize:12, fontWeight:700, color:"#EA580C", marginBottom:6 } }, "\u2691 Unlock Needed"),
-                reportTable(unlockCols, p.unlockItems)
-              )
+              reportTable(taskCols, p.tasks)
             ))
       )
     )
