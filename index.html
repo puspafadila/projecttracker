@@ -125,7 +125,7 @@ async function fetchAllFromSupabase() {
       resource: p.resource || "", startDate: p.start_date || "", endDate: p.end_date || "",
       tpo: p.tpo || "", deliveryLead: p.delivery_lead || "", priority: p.priority || "", phase: p.phase || "",
       createdBy: p.created_by || "", projectCode: p.project_code || "",
-      goLivePlan: p.go_live_plan || "", goLiveActual: p.go_live_actual || ""
+      goLivePlan: p.go_live_plan || "", goLiveActual: p.go_live_actual || "", rag: p.rag || ""
     };
   });
 
@@ -230,7 +230,8 @@ async function sbUpsertProject(row) {
     tpo: row.tpo || null, delivery_lead: row.deliveryLead || null, priority: row.priority || null,
     phase: row.phase || null, created_by: row.createdBy || null,
     project_code: row.projectCode || null,
-    go_live_plan: row.goLivePlan || null, go_live_actual: row.goLiveActual || null
+    go_live_plan: row.goLivePlan || null, go_live_actual: row.goLiveActual || null,
+    rag: row.rag || null
   }, { onConflict:"id" });
   return sqError("upsert project", error);
 }
@@ -560,7 +561,7 @@ const PROJECT_FIELD_LABELS = {
   application:"Application", deliveryModel:"Delivery Model", project:"Project", resource:"Resource",
   mountain:"Mountain", stream:"Stream", subStream:"Sub Stream", startDate:"Start Date", endDate:"End Date",
   tpo:"TPO", deliveryLead:"Delivery Lead", priority:"Priority", phase:"Phase",
-  goLivePlan:"Go Live Plan", goLiveActual:"Go Live Actual"
+  goLivePlan:"Go Live Plan", goLiveActual:"Go Live Actual", rag:"RAG"
 };
 function buildProjectFieldsChangeSummary(oldRow, newFields) {
   const lines = [];
@@ -621,6 +622,7 @@ const Icon = {
   grid: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("rect",{x:3,y:3,width:7,height:7,rx:1.5}), h("rect",{x:14,y:3,width:7,height:7,rx:1.5}), h("rect",{x:3,y:14,width:7,height:7,rx:1.5}), h("rect",{x:14,y:14,width:7,height:7,rx:1.5})),
   filter: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polygon",{points:"22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"})),
   file: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"}), h("polyline",{points:"14 2 14 8 20 8"})),
+  eye: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"}), h("circle",{cx:12,cy:12,r:3})),
   chevronRight: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("polyline",{points:"9 18 15 12 9 6"})),
   check: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"3", strokeLinecap:"round", strokeLinejoin:"round"}, h("polyline",{points:"20 6 9 17 4 12"})),
   logout: p => h("svg", {...ic(p), viewBox:"0 0 24 24", fill:"none", stroke:"currentColor", strokeWidth:"2"}, h("path",{d:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"}), h("polyline",{points:"16 17 21 12 16 7"}), h("line",{x1:21,y1:12,x2:9,y2:12})),
@@ -748,6 +750,9 @@ const STATUS_FG = { Open:"#166534", "In Progress":"#854D0E", Done:"#374151", Can
 const PRIORITY_OPTS = ["Critical","High","Medium","Low"];
 const PRIORITY_BG = { Critical:"#FEE2E2", High:"#FFEDD5", Medium:"#FEF9C3", Low:"#E5E7EB" };
 const PRIORITY_FG = { Critical:"#991B1B", High:"#C2410C", Medium:"#854D0E", Low:"#374151" };
+const RAG_OPTS = ["Green","Orange","Red"];
+const RAG_BG = { Green:"#DCFCE7", Orange:"#FFEDD5", Red:"#FEE2E2" };
+const RAG_FG = { Green:"#166534", Orange:"#C2410C", Red:"#991B1B" };
 /* Phase options for tasks now come from Master Data Management (dynamic),
    not a fixed list — see buildPhaseColorMaps below. */
 /* Badge color palette used to render the Project List "Phase" dropdown,
@@ -926,6 +931,7 @@ const PL_COLS = [
   { key:"phase", label:"Phase", width:150 },
   { key:"goLivePlan", label:"Go Live Plan", width:126 },
   { key:"goLiveActual", label:"Go Live Actual", width:126 },
+  { key:"rag", label:"RAG", width:104 },
 ];
 
 function StaticBadge({ value, bgMap, fgMap }) {
@@ -958,6 +964,7 @@ function plCellDisplay(colKey, row, phaseMeta, onOpenWizard) {
     case "phase": return h(StaticBadge, { value: row.phase, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg });
     case "goLivePlan": return h("span", { style:{ ...textStyle, fontSize:12 } }, row.goLivePlan || "\u2014");
     case "goLiveActual": return h("span", { style:{ ...textStyle, fontSize:12 } }, row.goLiveActual || "\u2014");
+    case "rag": return h(StaticBadge, { value: row.rag, bgMap: RAG_BG, fgMap: RAG_FG });
     default: return null;
   }
 }
@@ -988,6 +995,7 @@ function plCellEditor(colKey, row, onUpdate, phaseMeta, masterOptions, onOpenWiz
     case "deliveryLead": return h("input", { value: row.deliveryLead||"", onChange:e=>onUpdate("deliveryLead", e.target.value), placeholder:"Delivery Lead name", style:textStyle });
     case "priority": return h(RagSelect, { value: row.priority, options: PRIORITY_OPTS, bgMap: PRIORITY_BG, fgMap: PRIORITY_FG, onChange: v => onUpdate("priority", v) });
     case "phase": return h(RagSelect, { value: row.phase, options: phaseMeta.options, bgMap: phaseMeta.bg, fgMap: phaseMeta.fg, onChange: v => onUpdate("phase", v) });
+    case "rag": return h(RagSelect, { value: row.rag, options: RAG_OPTS, bgMap: RAG_BG, fgMap: RAG_FG, onChange: v => onUpdate("rag", v) });
     default: return null;
   }
 }
@@ -2070,6 +2078,239 @@ function DownloadPeriodModal({ open, onConfirm, onCancel }) {
       h("div", { style:{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:18 } },
         h("button", { className:"btn", onClick:onCancel }, "Cancel"),
         h("button", { className:"btn btn-primary", onClick:handleConfirm }, "Generate Report")
+      )
+    )
+  );
+}
+
+const REPORT_TABLE_TH = { textAlign:"left", padding:"6px 10px", fontSize:11.5, fontWeight:700, color:"#152238", background:"#F1F5F9", borderBottom:"1px solid #E2E8F0", whiteSpace:"nowrap" };
+const REPORT_TABLE_TD = { padding:"6px 10px", fontSize:12.5, color:"#334155", borderBottom:"1px solid #F1F5F9", verticalAlign:"top" };
+/* Type/PIC/Date/Status columns stay compact; Task is left unconstrained
+   so it naturally takes up the extra room. */
+const REPORT_NARROW_COL_WIDTH = { Type:110, PIC:120, Date:95, Status:100 };
+function reportTable(headers, rows) {
+  return h("table", { style:{ borderCollapse:"collapse", width:"100%", tableLayout:"fixed", marginBottom:8 } },
+    h("thead", null, h("tr", null, headers.map((hd, i) => h("th", { key:i, style:{ ...REPORT_TABLE_TH, width: REPORT_NARROW_COL_WIDTH[hd], whiteSpace: REPORT_NARROW_COL_WIDTH[hd] ? "nowrap" : "normal" } }, hd)))),
+    h("tbody", null,
+      rows.length === 0
+        ? h("tr", null, h("td", { style:{ ...REPORT_TABLE_TD, color:"#94A3B8" }, colSpan:headers.length }, "None"))
+        : rows.map((row, i) => h("tr", { key:i }, row.map((cell, j) => h("td", {
+            key:j,
+            style:{ ...REPORT_TABLE_TD, width: REPORT_NARROW_COL_WIDTH[headers[j]], whiteSpace: REPORT_NARROW_COL_WIDTH[headers[j]] ? "nowrap" : "normal", wordBreak: REPORT_NARROW_COL_WIDTH[headers[j]] ? "normal" : "break-word" }
+          }, cell))))
+    )
+  );
+}
+
+function escapeHtmlText(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+/* Builds a plain, self-contained <table> (no surrounding page chrome) so
+   pasting it elsewhere (Teams, Word, Excel) renders a clean table instead
+   of whatever else happened to be selected alongside it. Explicit
+   <thead>/<tbody> and a border attribute (not just CSS) matter here \u2014
+   several paste handlers, Teams' compose box included, only recognize a
+   pasted fragment as "a real table" with those present, and otherwise
+   silently fall back to plain text. */
+function sectionToHtmlTable(title, headers, rows) {
+  const widthStyle = hd => REPORT_NARROW_COL_WIDTH[hd] ? `width:${REPORT_NARROW_COL_WIDTH[hd]}px;` : "";
+  const theadRow = `<tr>${headers.map(hd => `<th style="${widthStyle(hd)}text-align:left;padding:4px 8px;border:1px solid #ccc;background:#f1f5f9;font-weight:700">${escapeHtmlText(hd)}</th>`).join("")}</tr>`;
+  const bodyRows = (rows.length ? rows : [headers.map(() => "None")]).map(row =>
+    `<tr>${row.map((c, j) => `<td style="${widthStyle(headers[j])}padding:4px 8px;border:1px solid #ccc">${escapeHtmlText(c)}</td>`).join("")}</tr>`
+  ).join("");
+  return `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(title)}</p>` +
+    `<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;table-layout:fixed">` +
+    `<thead>${theadRow}</thead><tbody>${bodyRows}</tbody></table>`;
+}
+function sectionToText(title, headers, rows) {
+  const lines = [title, headers.join("\t")];
+  (rows.length ? rows : [headers.map(() => "None")]).forEach(row => lines.push(row.map(String).join("\t")));
+  return lines.join("\n");
+}
+/* Wraps section fragments in a full HTML document. Windows clipboard's
+   CF_HTML format (what Office/Teams paste handlers read) expects a
+   complete-looking document with StartFragment/EndFragment markers around
+   the real content \u2014 pasting a bare fragment is exactly what tends to get
+   silently downgraded to plain text on paste. */
+function wrapClipboardHtml(bodyHtml) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${bodyHtml}</body></html>`;
+}
+/* Copies via the old synchronous document.execCommand("copy") path: build a
+   hidden contenteditable holding the real HTML (so the table structure is
+   preserved), select it, and copy. This works in more restricted contexts
+   (sandboxed iframes, non-HTTPS pages) than the modern async Clipboard API,
+   which can silently fail there. */
+function execCommandCopyHtml(html) {
+  const holder = document.createElement("div");
+  holder.setAttribute("contenteditable", "true");
+  holder.style.position = "fixed";
+  holder.style.left = "-99999px";
+  holder.style.top = "0";
+  holder.innerHTML = html;
+  document.body.appendChild(holder);
+  const range = document.createRange();
+  range.selectNodeContents(holder);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  sel.removeAllRanges();
+  document.body.removeChild(holder);
+  return ok;
+}
+/* Writes both an HTML table (so Teams/Word/Excel render an actual table on
+   paste) and a tab-separated plain-text fallback to the clipboard at once.
+   Tries the modern async API first, falls back to the old execCommand
+   path, and reports failure (rather than claiming success) if both fail so
+   the caller can show the user something they can copy by hand instead. */
+async function copyReportToClipboard(html, text) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([wrapClipboardHtml(html)], { type:"text/html" }),
+          "text/plain": new Blob([text], { type:"text/plain" })
+        })
+      ]);
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  if (execCommandCopyHtml(wrapClipboardHtml(html))) return true;
+  return false;
+}
+function CopyButton({ getHtml, getText, label, onFallback }) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const handleClick = async () => {
+    setFailed(false);
+    const ok = await copyReportToClipboard(getHtml(), getText());
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    else { setFailed(true); onFallback && onFallback(getText()); }
+  };
+  return h("button", {
+    onClick: handleClick, className:"btn",
+    style:{ fontSize:11, padding:"3px 9px", display:"flex", alignItems:"center", gap:4, marginLeft:"auto", ...(failed ? { borderColor:"#DC2626", color:"#DC2626" } : {}) }
+  },
+    copied ? "\u2713 Copied" : (failed ? "Copy failed \u2014 see below" : (label || "Copy"))
+  );
+}
+function reportSectionHeader(title, color, headers, rows, onFallback) {
+  return h("div", { style:{ display:"flex", alignItems:"center", marginBottom:8 } },
+    h("h4", { style:{ fontSize:13, fontWeight:700, color, margin:0 } }, title),
+    h(CopyButton, { getHtml:() => sectionToHtmlTable(title, headers, rows), getText:() => sectionToText(title, headers, rows), onFallback })
+  );
+}
+
+/* Auto-selects its text on mount so the user only has to press Ctrl/Cmd+C;
+   shown when the Clipboard API itself is blocked (e.g. a non-HTTPS host,
+   or a sandboxed embed) and every copy method has failed. */
+function CopyFallbackBox({ text }) {
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) { ref.current.focus(); ref.current.select(); } }, [text]);
+  if (!text) return null;
+  return h("div", { style:{ background:"#FEF2F2", border:"1px solid #FECACA", borderRadius:9, padding:12, marginBottom:20 } },
+    h("div", { style:{ fontSize:12, color:"#991B1B", fontWeight:600, marginBottom:6 } },
+      "Couldn't access the clipboard automatically here. The text below is already selected \u2014 press Ctrl+C (or Cmd+C on Mac) to copy it, then paste as usual."
+    ),
+    h("textarea", {
+      ref, readOnly:true, value:text, rows:6,
+      style:{ width:"100%", fontSize:11.5, fontFamily:"monospace", border:"1px solid #FCA5A5", borderRadius:6, padding:8, resize:"vertical" },
+      onClick: e => e.target.select()
+    })
+  );
+}
+
+/* Same content as the downloadable JPG report, but as real HTML tables the
+   user can select and paste (e.g. into Excel or a doc) instead of an image. */
+function ReportTableModal({ data, onClose }) {
+  const [fallbackText, setFallbackText] = useState("");
+  useEffect(() => { setFallbackText(""); }, [data]);
+  if (!data) return null;
+  const { sr, taskDetails, period } = data;
+  const fmtShort = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-US", { day:"2-digit", month:"short", year:"numeric" }) : "";
+  const periodLabel = period ? `${fmtShort(period.startDate)} \u2013 ${period.endDate ? fmtShort(period.endDate) : "present"}` : "";
+
+  // Group everything by project: each project's tasks (Completed/In
+  // Progress/Delayed, all with the same columns) together, plus its
+  // delayed-project status and any unlock-needed items, instead of one
+  // table per type across all projects.
+  const projectMap = new Map();
+  const ensureProject = (project, application) => {
+    const key = `${application || ""}||${project || ""}`;
+    if (!projectMap.has(key)) projectMap.set(key, { project: project || "Untitled", application: application || "\u2014", tasks: [], delayedLabel: null, unlockItems: [] });
+    return projectMap.get(key);
+  };
+  taskDetails.completed.forEach(t => ensureProject(t.project, t.application).tasks.push(["Completed", t.task, t.pic, t.date || "\u2014"]));
+  (taskDetails.inProgress || []).forEach(t => ensureProject(t.project, t.application).tasks.push(["In Progress", t.task, t.pic, t.date || "\u2014"]));
+  taskDetails.delayed.forEach(t => ensureProject(t.project, t.application).tasks.push(["Delayed", t.task, t.pic, t.date || "\u2014"]));
+  sr.atRisk.forEach(ps => { ensureProject(ps.row.project, ps.row.application).delayedLabel = ps.riskLabel; });
+  sr.unlockNeededDetails.forEach(u => ensureProject(u.project, u.application).unlockItems.push([u.task, u.pic, u.status || "\u2014", u.date || "\u2014"]));
+
+  const taskCols = ["Type", "Task", "PIC", "Date"];
+  const unlockCols = ["Task", "PIC", "Status", "Date"];
+  const projects = Array.from(projectMap.values()).sort((a, b) => a.project.localeCompare(b.project));
+
+  const projectToHtml = p => {
+    let out = `<p style="font-weight:700;margin:0 0 4px 0;font-family:Arial,sans-serif">${escapeHtmlText(p.project)} (${escapeHtmlText(p.application)})</p>`;
+    if (p.delayedLabel) out += `<p style="color:#C2410C;font-weight:600;margin:0 0 6px 0;font-family:Arial,sans-serif">\u26A0 Project Delayed: ${escapeHtmlText(p.delayedLabel)}</p>`;
+    out += sectionToHtmlTable("", taskCols, p.tasks).replace(/^<p[^>]*><\/p>/, "");
+    if (p.unlockItems.length) out += `<p style="font-weight:600;color:#EA580C;margin:8px 0 4px 0;font-family:Arial,sans-serif">\u2691 Unlock Needed</p>` + sectionToHtmlTable("", unlockCols, p.unlockItems).replace(/^<p[^>]*><\/p>/, "");
+    return out;
+  };
+  const projectToText = p => {
+    const lines = [`${p.project} (${p.application})`];
+    if (p.delayedLabel) lines.push(`Project Delayed: ${p.delayedLabel}`);
+    lines.push(sectionToText("", taskCols, p.tasks).split("\n").slice(1).join("\n"));
+    if (p.unlockItems.length) { lines.push("Unlock Needed"); lines.push(sectionToText("", unlockCols, p.unlockItems).split("\n").slice(1).join("\n")); }
+    return lines.join("\n");
+  };
+  const getAllHtml = () => projects.map(projectToHtml).join("<br>");
+  const getAllText = () => projects.map(projectToText).join("\n\n");
+
+  return h("div", {
+    style:{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", zIndex:210, display:"flex", alignItems:"center", justifyContent:"center", padding:20 },
+    onClick: onClose
+  },
+    h("div", {
+      style:{ background:"#fff", borderRadius:12, maxWidth:1000, width:"100%", maxHeight:"90vh", display:"flex", flexDirection:"column", boxShadow:"0 20px 50px rgba(0,0,0,0.25)" },
+      onClick: e => e.stopPropagation()
+    },
+      h("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 20px", borderBottom:"1px solid #E2E8F0", gap:12 } },
+        h("div", null,
+          h("div", { style:{ fontSize:16, fontWeight:700, color:"#152238" } }, `${sr.streamName} \u2014 Stream Report`),
+          periodLabel && h("div", { style:{ fontSize:12, color:"#94A3B8", marginTop:2 } }, `Period: ${periodLabel}`)
+        ),
+        h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
+          h(CopyButton, { getHtml:getAllHtml, getText:getAllText, label:"Copy All", onFallback:setFallbackText }),
+          h("button", { className:"btn", onClick:onClose }, "Close")
+        )
+      ),
+      h("div", { style:{ padding:20, overflow:"auto" } },
+        h(CopyFallbackBox, { text:fallbackText }),
+        projects.length === 0
+          ? h("div", { style:{ fontSize:13, color:"#94A3B8" } }, "No projects with activity in this period.")
+          : projects.map((p, i) => h("div", { key:i, style:{ marginBottom:24, paddingBottom:20, borderBottom: i < projects.length - 1 ? "1px solid #F1F5F9" : "none" } },
+              h("div", { style:{ display:"flex", alignItems:"center", marginBottom:6 } },
+                h("div", null,
+                  h("h4", { style:{ fontSize:14, fontWeight:700, color:"#152238", margin:0 } }, p.project),
+                  h("div", { style:{ fontSize:11.5, color:"#94A3B8" } }, p.application)
+                ),
+                h(CopyButton, { getHtml:() => projectToHtml(p), getText:() => projectToText(p), onFallback:setFallbackText })
+              ),
+              p.delayedLabel && h("div", { style:{ fontSize:12, color:"#C2410C", fontWeight:600, marginBottom:8 } }, `\u26A0 Project Delayed: ${p.delayedLabel}`),
+              reportTable(taskCols, p.tasks),
+              p.unlockItems.length > 0 && h("div", { style:{ marginTop:10 } },
+                h("div", { style:{ fontSize:12, fontWeight:700, color:"#EA580C", marginBottom:6 } }, "\u2691 Unlock Needed"),
+                reportTable(unlockCols, p.unlockItems)
+              )
+            ))
       )
     )
   );
@@ -3202,7 +3443,9 @@ function CreateProjectForm({ form, onFieldChange, onSubmit, phaseOptions, mounta
       h("div", { style:{ background:"#DCE9F7", borderRight:cellBorder, borderTop:cellBorder } },
         h(CreateProjectField, { label:"Go Live Actual", required:false },
           h(DateInput, { value: form.goLiveActual || "", onChange:e => onFieldChange("goLiveActual", e.target.value), style:inputStyle }))),
-      h("div", { style:{ background:"#DCE9F7", borderTop:cellBorder } })
+      h("div", { style:{ background:"#DCE9F7", borderTop:cellBorder } },
+        h(CreateProjectField, { label:"RAG", required:false },
+          h(RagSelect, { value: form.rag || "", options: RAG_OPTS, bgMap: RAG_BG, fgMap: RAG_FG, onChange: v => onFieldChange("rag", v) })))
     ),
     (onCancel || onSubmit) && h("div", { style:{ padding:16, display:"flex", justifyContent:"flex-end", gap:10, borderTop:cellBorder } },
       onCancel && h("button", { className:"btn", onClick:onCancel }, "Cancel"),
@@ -3231,7 +3474,8 @@ function extractProjectFields(row) {
     startDate: (row && row.startDate) || "", endDate: (row && row.endDate) || "",
     tpo: (row && row.tpo) || "", deliveryLead: (row && row.deliveryLead) || "",
     priority: (row && row.priority) || "", phase: (row && row.phase) || "",
-    goLivePlan: (row && row.goLivePlan) || "", goLiveActual: (row && row.goLiveActual) || ""
+    goLivePlan: (row && row.goLivePlan) || "", goLiveActual: (row && row.goLiveActual) || "",
+    rag: (row && row.rag) || ""
   };
 }
 
@@ -4312,6 +4556,8 @@ function DashboardReportView({ projectList, records }) {
   const [expandedDelayedProjects, setExpandedDelayedProjects] = useState({}); // { [streamName]: boolean }
   const [downloadingStream, setDownloadingStream] = useState(null);
   const [downloadModalStream, setDownloadModalStream] = useState(null);
+  const [viewModalStream, setViewModalStream] = useState(null);
+  const [viewReportData, setViewReportData] = useState(null); // { sr, taskDetails, period }
   const [pendingMeasurement, setPendingMeasurement] = useState(null); // { sr, taskDetails, period } \u2014 waiting on TaskListMeasurer
   const [pendingCapture, setPendingCapture] = useState(null); // { sr, pages, totals, period } \u2014 ready to render+capture
 
@@ -4322,6 +4568,14 @@ function DashboardReportView({ projectList, records }) {
     const taskDetails = buildPeriodTaskDetails(sr.projectItems, startDate, endDate, todayISO);
     setDownloadingStream(sr.streamName);
     setPendingMeasurement({ sr, taskDetails, period: { startDate, endDate } });
+  };
+
+  const handleConfirmViewPeriod = (startDate, endDate) => {
+    const sr = streamReports.find(s => s.streamName === viewModalStream);
+    setViewModalStream(null);
+    if (!sr) return;
+    const taskDetails = buildPeriodTaskDetails(sr.projectItems, startDate, endDate, todayISO);
+    setViewReportData({ sr, taskDetails, period: { startDate, endDate } });
   };
 
   const handleTaskListsMeasured = heights => {
@@ -4407,13 +4661,21 @@ function DashboardReportView({ projectList, records }) {
               ),
               h("div", { style:{ display:"flex", alignItems:"center", gap:12 } },
                 h("button", {
+                  onClick: () => setViewModalStream(sr.streamName),
+                  className:"btn", title:"View this stream's report as a copyable table",
+                  style:{ display:"flex", alignItems:"center", gap:6, fontSize:12 }
+                },
+                  h(Icon.eye, {}),
+                  "View Report"
+                ),
+                h("button", {
                   onClick: () => setDownloadModalStream(sr.streamName),
                   disabled: downloadingStream === sr.streamName,
                   className:"btn", title:"Download this stream's report as a JPG",
                   style:{ display:"flex", alignItems:"center", gap:6, fontSize:12 }
                 },
                   h(Icon.download, {}),
-                  downloadingStream === sr.streamName ? "Generating\u2026" : "Download"
+                  downloadingStream === sr.streamName ? "Generating\u2026" : "Download Report"
                 ),
                 h("div", { style:{ fontSize:18, fontWeight:800, color: sr.overallPct === 100 ? "#166534" : "#1E3A5F" } }, `${sr.overallPct}%`)
               )
@@ -4588,6 +4850,12 @@ function DashboardReportView({ projectList, records }) {
       onConfirm: handleConfirmPeriod,
       onCancel: () => setDownloadModalStream(null)
     }),
+    h(DownloadPeriodModal, {
+      open: viewModalStream !== null,
+      onConfirm: handleConfirmViewPeriod,
+      onCancel: () => setViewModalStream(null)
+    }),
+    h(ReportTableModal, { data: viewReportData, onClose: () => setViewReportData(null) }),
     pendingMeasurement && h(TaskListMeasurer, {
       completed: pendingMeasurement.taskDetails.completed,
       inProgress: pendingMeasurement.taskDetails.inProgress || [],
@@ -4896,7 +5164,7 @@ function AppRoot() {
   const [remoteLoading, setRemoteLoading] = useState(!!supabaseClient); // checking for an existing session
   const [dataLoading, setDataLoading] = useState(false); // fetching app data, only once logged in
   const remoteHydrated = useRef(false);
-  const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"", goLivePlan:"", goLiveActual:"" });
+  const [createProjectForm, setCreateProjectForm] = useState({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"", goLivePlan:"", goLiveActual:"", rag:"" });
   const [cmApplicationText, setCmApplicationText] = useState(stored.lastCmApplication || "");
   const [cmProjectText, setCmProjectText] = useState(stored.lastCmProject || "");
   const [changeManagementRecords, setChangeManagementRecords] = useState(stored.changeManagementRecords || {});
@@ -5217,7 +5485,7 @@ function AppRoot() {
     const row = { id: uid(), ...createProjectForm, createdBy: currentUser ? currentUser.email : "", projectCode };
     setProjectList(list => [...list, row]);
     if (supabaseClient) sbUpsertProject(row);
-    setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"", goLivePlan:"", goLiveActual:"" });
+    setCreateProjectForm({ application:"", deliveryModel:"", project:"", resource:"", mountain:"", stream:"", subStream:"", startDate:"", endDate:"", tpo:"", deliveryLead:"", priority:"", phase:"", goLivePlan:"", goLiveActual:"", rag:"" });
     setActiveView("list");
   };
 
