@@ -2258,6 +2258,7 @@ function ReportTableModal({ data, onClose }) {
   taskDetails.completed.forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "Completed"]));
   (taskDetails.inProgress || []).forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "In Progress"]));
   taskDetails.delayed.forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", "Delayed"]));
+  (taskDetails.open || []).forEach(t => ensureProject(t.project, t.application).tasks.push([t.task, t.pic, t.date || "\u2014", t.status || "Open"]));
   sr.atRisk.forEach(ps => { ensureProject(ps.row.project, ps.row.application).delayedLabel = ps.riskLabel; });
 
   const taskCols = ["Task", "PIC", "Date", "Status"];
@@ -3990,7 +3991,10 @@ function TaskListMeasurer({ completed, inProgress, delayed, phaseCategories, del
 }
 
 function paginateStreamReport(sr, taskDetails, measuredHeights) {
-  const completed = taskDetails.completed, inProgress = taskDetails.inProgress || [], delayed = taskDetails.delayed;
+  // "open" (e.g. a task still "Open" with a future date) isn't Completed,
+  // Delayed, or explicitly "In Progress" \u2014 folded into the In Progress
+  // column here so it's never silently dropped from the image report.
+  const completed = taskDetails.completed, inProgress = (taskDetails.inProgress || []).concat(taskDetails.open || []), delayed = taskDetails.delayed;
   const delayedProjects = sr.atRisk;
   const unlockNeeded = sr.unlockNeededDetails;
   const pages = [];
@@ -4433,27 +4437,43 @@ function buildPeriodTaskDetails(items, startDate, endDate, todayISO) {
     if (endDate && d > endDate) return false;
     return true;
   };
-  const completed = [], delayed = [], inProgress = [];
+  // Every in-range item lands in exactly one bucket \u2014 previously a task
+  // that was neither Done, overdue, nor explicitly "In Progress" (e.g. an
+  // "Open" task with a future date) matched none of the three checks and
+  // was silently dropped from the report entirely. "open" now catches
+  // anything left over, keeping the item's real status label.
+  const completed = [], delayed = [], inProgress = [], open = [];
+  const classify = (t, dateField) => {
+    if (norm(t.status).toLowerCase() === "done") return "completed";
+    if (isDelayedItem(t, dateField, todayISO)) return "delayed";
+    if (norm(t.status).toLowerCase() === "in progress") return "inProgress";
+    return "open";
+  };
   items.forEach(ps => {
     ps.tasks.forEach(t => {
       if (!inRange(t.endDate)) return;
-      const entry = { id:`t-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.endDate, source:"Project Timeline", project:ps.row.project || "Untitled", application:ps.row.application || "" };
-      if (norm(t.status).toLowerCase() === "done") completed.push(entry);
-      if (isDelayedItem(t, "endDate", todayISO)) delayed.push(entry);
-      if (norm(t.status).toLowerCase() === "in progress") inProgress.push(entry);
+      const entry = { id:`t-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.endDate, status:t.status || "Open", source:"Project Timeline", project:ps.row.project || "Untitled", application:ps.row.application || "" };
+      const bucket = classify(t, "endDate");
+      if (bucket === "completed") completed.push(entry);
+      else if (bucket === "delayed") delayed.push(entry);
+      else if (bucket === "inProgress") inProgress.push(entry);
+      else open.push(entry);
     });
     ps.todos.forEach(t => {
       if (!inRange(t.dueDate)) return;
-      const entry = { id:`d-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.dueDate, source:"Tasks", project:ps.row.project || "Untitled", application:ps.row.application || "" };
-      if (norm(t.status).toLowerCase() === "done") completed.push(entry);
-      if (isDelayedItem(t, "dueDate", todayISO)) delayed.push(entry);
-      if (norm(t.status).toLowerCase() === "in progress") inProgress.push(entry);
+      const entry = { id:`d-${t.id}`, task:t.task || "Untitled", pic:t.pic || "\u2014", date:t.dueDate, status:t.status || "Open", source:"Tasks", project:ps.row.project || "Untitled", application:ps.row.application || "" };
+      const bucket = classify(t, "dueDate");
+      if (bucket === "completed") completed.push(entry);
+      else if (bucket === "delayed") delayed.push(entry);
+      else if (bucket === "inProgress") inProgress.push(entry);
+      else open.push(entry);
     });
   });
   completed.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   delayed.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   inProgress.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-  return { completed, delayed, inProgress };
+  open.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  return { completed, delayed, inProgress, open };
 }
 
 function computePhaseCategoryReports(projectStats, todayISO) {
@@ -4620,7 +4640,7 @@ function DashboardReportView({ projectList, records }) {
     const pages = paginateStreamReport(sr, taskDetails, heights);
     const totals = {
       completed: taskDetails.completed.length,
-      inProgress: (taskDetails.inProgress || []).length,
+      inProgress: (taskDetails.inProgress || []).length + (taskDetails.open || []).length,
       delayed: taskDetails.delayed.length,
       delayedProjects: sr.atRisk.length,
       unlockNeeded: sr.unlockNeededDetails.length
@@ -4894,7 +4914,7 @@ function DashboardReportView({ projectList, records }) {
     h(ReportTableModal, { data: viewReportData, onClose: () => setViewReportData(null) }),
     pendingMeasurement && h(TaskListMeasurer, {
       completed: pendingMeasurement.taskDetails.completed,
-      inProgress: pendingMeasurement.taskDetails.inProgress || [],
+      inProgress: (pendingMeasurement.taskDetails.inProgress || []).concat(pendingMeasurement.taskDetails.open || []),
       delayed: pendingMeasurement.taskDetails.delayed,
       phaseCategories: pendingMeasurement.sr.phaseCategories,
       delayedProjects: pendingMeasurement.sr.atRisk,
